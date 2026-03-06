@@ -1,25 +1,36 @@
-"""
-Copy data already in common format into a glassesTools recording.
+"""Copy data already in common format into a glassesTools recording.
 Name of recording will be the name of the folder that is imported.
 """
 
-import shutil
 import pathlib
+import shutil
+
 import pandas as pd
 
-from ..recording import Recording
+from .. import gaze_headref, naming, video_utils
 from ..eyetracker import EyeTracker
-from .. import gaze_headref
-from .. import naming, video_utils
+from ..recording import Recording
 
-def importData(output_dir: str|pathlib.Path=None, source_dir: str|pathlib.Path=None, rec_info: Recording=None, device_name: str=None, copy_scene_video = True, source_dir_as_relative_path = False, cam_cal_file: str|pathlib.Path=None) -> Recording:
-    from . import check_folders, _store_data
-    output_dir, source_dir, rec_info, device_name = check_folders(output_dir, source_dir, rec_info, EyeTracker.Generic, device_name)
-    print(f'processing: {source_dir.name} -> {output_dir}')
 
-    ### check and copy needed files to the output directory
-    print('  Check and copy raw data...')
-    ### check recording and get export directory
+def importData(
+    output_dir: str | pathlib.Path = None,
+    source_dir: str | pathlib.Path = None,
+    rec_info: Recording = None,
+    device_name: str = None,
+    copy_scene_video=True,
+    source_dir_as_relative_path=False,
+    cam_cal_file: str | pathlib.Path = None,
+) -> Recording:
+    from . import _store_data, check_folders
+
+    output_dir, source_dir, rec_info, device_name = check_folders(
+        output_dir, source_dir, rec_info, EyeTracker.Generic, device_name
+    )
+    print(f"processing: {source_dir.name} -> {output_dir}")
+
+    # check and copy needed files to the output directory
+    print("  Check and copy raw data...")
+    # check recording and get export directory
     if rec_info is not None:
         checkRecording(source_dir, rec_info, device_name)
     else:
@@ -31,13 +42,12 @@ def importData(output_dir: str|pathlib.Path=None, source_dir: str|pathlib.Path=N
     if not output_dir.is_dir():
         output_dir.mkdir()
 
-
-    ### copy the raw data to the output directory
+    # copy the raw data to the output directory
     srcVid, destVid, gotFrameTs, gotCal = copyGenericRecording(source_dir, output_dir, copy_scene_video, cam_cal_file)
     if destVid:
         rec_info.scene_video_file = destVid.name
     else:
-        rec_info.scene_video_file =  srcVid.name
+        rec_info.scene_video_file = srcVid.name
 
     if not gotFrameTs:
         frameTimestamps = video_utils.get_frame_timestamps_from_video(rec_info.get_scene_video_path())
@@ -45,47 +55,54 @@ def importData(output_dir: str|pathlib.Path=None, source_dir: str|pathlib.Path=N
         frameTimestamps = None
 
     # check gaze data hass a frame index column, and if not, make one
-    gaze_data = pd.read_csv(output_dir/naming.gaze_data_fname, delimiter='\t')
-    if 'frame_idx' not in gaze_data.columns:
-        print('    !! No frame index column found in gaze data, adding one based on timestamps...')
+    gaze_data = pd.read_csv(output_dir / naming.gaze_data_fname, delimiter="\t")
+    if "frame_idx" not in gaze_data.columns:
+        print("    !! No frame index column found in gaze data, adding one based on timestamps...")
         if frameTimestamps is None:
-            frameTimestamps = pd.read_csv(output_dir/naming.frame_timestamps_fname, delimiter='\t', index_col='frame_idx')
+            frameTimestamps = pd.read_csv(
+                output_dir / naming.frame_timestamps_fname, delimiter="\t", index_col="frame_idx"
+            )
         # make frame index column by matching timestamps
-        frameIdx = video_utils.timestamps_to_frame_number(gaze_data.loc[:,'timestamp'].values,frameTimestamps['timestamp'].to_numpy())
-        gaze_data.insert(1,'frame_idx',frameIdx['frame_idx'].values)
+        frameIdx = video_utils.timestamps_to_frame_number(
+            gaze_data.loc[:, "timestamp"].values, frameTimestamps["timestamp"].to_numpy()
+        )
+        gaze_data.insert(1, "frame_idx", frameIdx["frame_idx"].values)
         # store back
-        gaze_data.to_csv(output_dir/naming.gaze_data_fname, sep='\t', index=False, na_rep='nan')
+        gaze_data.to_csv(output_dir / naming.gaze_data_fname, sep="\t", index=False, na_rep="nan")
 
     if not gotCal:
-        print('    !! No camera calibration provided!')
+        print("    !! No camera calibration provided!")
 
     if not rec_info.duration:
         # if duration not known, fill it
         # make a reasonable estimate of duration
-        gaze = gaze_headref.read_dict_from_file(output_dir/naming.gaze_data_fname)[0]
-        framets = frameTimestamps   # local copy to not accidentally trigger any overwriting in _store_data() below
+        gaze = gaze_headref.read_dict_from_file(output_dir / naming.gaze_data_fname)[0]
+        framets = frameTimestamps  # local copy to not accidentally trigger any overwriting in _store_data() below
         if framets is None:
-            framets = pd.read_csv(output_dir/naming.frame_timestamps_fname, delimiter='\t', index_col='frame_idx')
+            framets = pd.read_csv(output_dir / naming.frame_timestamps_fname, delimiter="\t", index_col="frame_idx")
         gt0 = gaze[min(gaze.keys())][0].timestamp_ori
         gte = gaze[max(gaze.keys())][-1].timestamp_ori
-        rec_info.duration = float(round(max(gte-gt0,framets.timestamp.iat[-1])))
+        rec_info.duration = float(round(max(gte - gt0, framets.timestamp.iat[-1])))
 
     _store_data(output_dir, None, frameTimestamps, rec_info, source_dir_as_relative_path=source_dir_as_relative_path)
 
     return rec_info
 
-def getRecordingInfo(inputDir: str|pathlib.Path, device_name: str=None) -> Recording:
+
+def getRecordingInfo(inputDir: str | pathlib.Path, device_name: str = None) -> Recording:
     # returns None if not a recording directory
     inputDir = pathlib.Path(inputDir)
 
-    rec_info_fname = inputDir/Recording.default_json_file_name
+    rec_info_fname = inputDir / Recording.default_json_file_name
     if rec_info_fname.is_file():
         recInfo = Recording.load_from_json(rec_info_fname)
-        if recInfo.eye_tracker!=EyeTracker.Generic:
-            print(f"A recording for a \"{EyeTracker.Generic.value}\" eye tracker was not found in the folder {inputDir}.")
+        if recInfo.eye_tracker != EyeTracker.Generic:
+            print(
+                f'A recording for a "{EyeTracker.Generic.value}" eye tracker was not found in the folder {inputDir}.'
+            )
             return None
-        if recInfo.eye_tracker_name!=device_name:
-            print(f"A recording for a \"{device_name}\" device was not found in the folder {inputDir}.")
+        if recInfo.eye_tracker_name != device_name:
+            print(f'A recording for a "{device_name}" device was not found in the folder {inputDir}.')
             return None
         # override inputDir to make sure its set correctly
         recInfo.source_directory = inputDir
@@ -95,41 +112,49 @@ def getRecordingInfo(inputDir: str|pathlib.Path, device_name: str=None) -> Recor
         recInfo.name = inputDir.name
 
     # check expected files are present
-    for f in ('worldCamera.mp4','gazeData.tsv'):
-        if not (inputDir/f).is_file():
-            print(f'This directory does not contain a valid generic recording for a {device_name} eye tracker. The {f} file is not found in the input directory {inputDir}.')
+    for f in ("worldCamera.mp4", "gazeData.tsv"):
+        if not (inputDir / f).is_file():
+            print(
+                f"This directory does not contain a valid generic recording for a {device_name} eye tracker. The {f} file is not found in the input directory {inputDir}."
+            )
             return None
 
     # we got a valid recording
     # return what we've got
     return recInfo
 
-def checkRecording(inputDir: str|pathlib.Path, recInfo: Recording, device_name: str=None):
+
+def checkRecording(inputDir: str | pathlib.Path, recInfo: Recording, device_name: str = None):
     actualRecInfo = getRecordingInfo(inputDir, device_name)
 
-    if actualRecInfo is None or recInfo.name!=actualRecInfo.name:
-        raise ValueError(f"A recording with the name \"{recInfo.name}\" was not found in the folder {inputDir}.")
+    if actualRecInfo is None or recInfo.name != actualRecInfo.name:
+        raise ValueError(f'A recording with the name "{recInfo.name}" was not found in the folder {inputDir}.')
 
     # make sure caller did not mess with recInfo
-    if recInfo.eye_tracker_name!=actualRecInfo.eye_tracker_name:
-        raise ValueError(f"A recording for a \"{recInfo.eye_tracker_name}\" device was not found in the folder {inputDir}.")
+    if recInfo.eye_tracker_name != actualRecInfo.eye_tracker_name:
+        raise ValueError(
+            f'A recording for a "{recInfo.eye_tracker_name}" device was not found in the folder {inputDir}.'
+        )
 
-def copyGenericRecording(inputDir: pathlib.Path, outputDir: pathlib.Path, copy_scene_video:bool, cam_cal_file: str|pathlib.Path|None):
-    gazeFile = inputDir/'gazeData.tsv'
+
+def copyGenericRecording(
+    inputDir: pathlib.Path, outputDir: pathlib.Path, copy_scene_video: bool, cam_cal_file: str | pathlib.Path | None
+):
+    gazeFile = inputDir / "gazeData.tsv"
     if not gazeFile.is_file():
-        raise RuntimeError(f'The {gazeFile} file is not found in the input directory {inputDir}')
+        raise RuntimeError(f"The {gazeFile} file is not found in the input directory {inputDir}")
     shutil.copy2(gazeFile, outputDir / naming.gaze_data_fname)
 
-    vidSrcFile = inputDir/'worldCamera.mp4'
+    vidSrcFile = inputDir / "worldCamera.mp4"
     if not vidSrcFile.is_file():
-        raise RuntimeError(f'The {vidSrcFile} file is not found in the input directory {inputDir}')
+        raise RuntimeError(f"The {vidSrcFile} file is not found in the input directory {inputDir}")
     if copy_scene_video:
-        vidDestFile = outputDir / f'{naming.scene_camera_video_fname_stem}.mp4'
+        vidDestFile = outputDir / f"{naming.scene_camera_video_fname_stem}.mp4"
         shutil.copy2(vidSrcFile, vidDestFile)
     else:
         vidDestFile = None
 
-    frame_ts_file = inputDir/'frameTimestamps.tsv'
+    frame_ts_file = inputDir / "frameTimestamps.tsv"
     gotFrameTs = frame_ts_file.is_file()
     if gotFrameTs:
         shutil.copy2(frame_ts_file, outputDir / naming.frame_timestamps_fname)
@@ -138,7 +163,7 @@ def copyGenericRecording(inputDir: pathlib.Path, outputDir: pathlib.Path, copy_s
         shutil.copy2(cam_cal_file, outputDir / naming.scene_camera_calibration_fname)
         gotCal = True
     else:
-        cal_file = inputDir/'calibration.xml'
+        cal_file = inputDir / "calibration.xml"
         gotCal = cal_file.is_file()
         if gotCal:
             shutil.copy2(cal_file, outputDir / naming.scene_camera_calibration_fname)

@@ -2,10 +2,12 @@
 # added cleanup fun that may be needed to cancel work occurring in main thread so that join gets called
 from threading import Thread
 
+
 class PropagatingThread(Thread):
     def __init__(self, cleanup_fun=None, *args, **kwargs):
-        super(PropagatingThread, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.cleanup_fun = cleanup_fun
+
     def run(self):
         self.exc = None
         try:
@@ -16,7 +18,7 @@ class PropagatingThread(Thread):
                 self.cleanup_fun()
 
     def join(self, timeout=None):
-        super(PropagatingThread, self).join(timeout)
+        super().join(timeout)
         if self.exc:
             raise self.exc
         return self.ret

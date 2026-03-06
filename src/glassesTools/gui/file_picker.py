@@ -1,14 +1,17 @@
 import pathlib
-import typing
 import sys
-import natsort
 import threading
+import typing
 from dataclasses import dataclass
-from imgui_bundle import hello_imgui, imgui, icons_fontawesome_6 as ifa6, imspinner
 
-from .. import file_actions, file_action_provider as fap, platform, utils
-from . import msg_box, utils as gui_utils
+import natsort
+from imgui_bundle import hello_imgui, imgui, imspinner
+from imgui_bundle import icons_fontawesome_6 as ifa6
 
+from .. import file_action_provider as fap
+from .. import file_actions, platform, utils
+from . import msg_box
+from . import utils as gui_utils
 
 DRIVE_ICON = ifa6.ICON_FA_HARD_DRIVE
 SERVER_ICON = ifa6.ICON_FA_SERVER
@@ -19,48 +22,57 @@ FILE_ICON = ifa6.ICON_FA_FILE
 @dataclass
 class DirEntryWithCache(file_actions.DirEntry):
     # display fields
-    display_name: str = ''
+    display_name: str = ""
     ctime_str: str = None
     mtime_str: str = None
     size_str: str = None
 
     def __init__(self, item: file_actions.DirEntry):
-        super().__init__(item.name, item.is_dir, item.full_path, item.ctime, item.mtime, item.size, item.mime_type, item.extra)
+        super().__init__(
+            item.name, item.is_dir, item.full_path, item.ctime, item.mtime, item.size, item.mime_type, item.extra
+        )
 
         # prep display strings
-        if self.mime_type and self.mime_type.startswith('file_action/drive'):
+        if self.mime_type and self.mime_type.startswith("file_action/drive"):
             icon = DRIVE_ICON
-        elif self.mime_type=='file_action/net_name':
+        elif self.mime_type == "file_action/net_name":
             icon = SERVER_ICON
         elif self.is_dir:
             icon = DIR_ICON
         else:
             icon = FILE_ICON
-        self.display_name   = icon + "  " + self.name
+        self.display_name = icon + "  " + self.name
 
-        self.ctime_str      = self.ctime.strftime("%Y-%m-%d %H:%M:%S") if self.ctime else None
-        self.mtime_str      = self.mtime.strftime("%Y-%m-%d %H:%M:%S") if self.mtime else None
+        self.ctime_str = self.ctime.strftime("%Y-%m-%d %H:%M:%S") if self.ctime else None
+        self.mtime_str = self.mtime.strftime("%Y-%m-%d %H:%M:%S") if self.mtime else None
 
         # size
-        if not self.is_dir or (self.mime_type and self.mime_type.startswith('file_action/drive')):
+        if not self.is_dir or (self.mime_type and self.mime_type.startswith("file_action/drive")):
             i = 0
-            units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+            units = ["B", "KiB", "MiB", "GiB", "TiB"]
             size = self.size
-            while size>1024:
-                i+=1
+            while size > 1024:
+                i += 1
                 size /= 1024
-            if i==0:
-                self.size_str = f'{size:.0f} {units[i]}'
+            if i == 0:
+                self.size_str = f"{size:.0f} {units[i]}"
             else:
-                self.size_str = f'{size:.1f} {units[i]}'
+                self.size_str = f"{size:.1f} {units[i]}"
+
 
 class FilePicker:
-    default_flags: int = (
-        imgui.WindowFlags_.no_collapse |
-        imgui.WindowFlags_.no_saved_settings
-    )
+    default_flags: int = imgui.WindowFlags_.no_collapse | imgui.WindowFlags_.no_saved_settings
 
-    def __init__(self, title="File picker", dir_picker=False, start_dir: str | pathlib.Path | None = None, callback: typing.Callable = None, allow_multiple = True, file_action_provider: fap.FileActionProvider = None, custom_popup_flags=0):
+    def __init__(
+        self,
+        title="File picker",
+        dir_picker=False,
+        start_dir: str | pathlib.Path | None = None,
+        callback: typing.Callable = None,
+        allow_multiple=True,
+        file_action_provider: fap.FileActionProvider = None,
+        custom_popup_flags=0,
+    ):
         self.title = title
         self.elapsed = 0.0
         self.callback = callback
@@ -69,7 +81,7 @@ class FilePicker:
         else:
             self.file_action_provider = fap.FileActionProvider(self._listing_done, self._action_done)
 
-        self._listing_cache: dict[str|pathlib.Path, dict[int,DirEntryWithCache]] = {}
+        self._listing_cache: dict[str | pathlib.Path, dict[int, DirEntryWithCache]] = {}
         self.popup_stack = []
         self.dialog_provider = DialogProvider(self, self._launch_action)
         self.disable_keyboard_navigation = False
@@ -78,7 +90,7 @@ class FilePicker:
         self.selected: dict[int, bool] = {}
         self.items_lock: threading.Lock = threading.Lock()  # for self.items and self.selected
         self.msg: str = None
-        self.filter_box_text = ''
+        self.filter_box_text = ""
         self.require_sort = False
         self.sorted_items: list[int] = []
         self.last_clicked_id: int = None
@@ -89,7 +101,7 @@ class FilePicker:
         self.set_is_dir_picker(dir_picker)
         self._show_only_dirs = False
         self.predicate_showable: typing.Callable[[int], bool] = None
-        self.set_show_only_dirs(self._is_dir_picker)   # by default, a dir picker only shows dirs
+        self.set_show_only_dirs(self._is_dir_picker)  # by default, a dir picker only shows dirs
 
         self.accent_color: tuple[float] = None
         self.bg_color: tuple[float] = None
@@ -100,14 +112,14 @@ class FilePicker:
         self.reset_scroll = False
         self.request_highlight: pathlib.Path = None
         self.select_when_loaded: list[pathlib.Path] = None
-        self.history: list[str|pathlib.Path] = []
+        self.history: list[str | pathlib.Path] = []
         self.history_loc = -1
-        self.path_bar_popup: dict[str,typing.Any] = {}
+        self.path_bar_popup: dict[str, typing.Any] = {}
         self.default_flags = custom_popup_flags or FilePicker.default_flags
         self.platform_is_windows = sys.platform.startswith("win")
 
-        self.goto(start_dir or '.')
-        self._request_listing('root')   # request root listing so we have the drive names
+        self.goto(start_dir or ".")
+        self._request_listing("root")  # request root listing so we have the drive names
 
     def set_is_dir_picker(self, is_dir_picker):
         self._is_dir_picker = is_dir_picker
@@ -127,64 +139,63 @@ class FilePicker:
         self.accent_color = accent_color
         self.bg_color = bg_color
 
-    def _is_root(self, path: str|pathlib.Path):
-        if platform.os==platform.Os.Windows and isinstance(path, str):
-            if path.casefold()==self._get_path_display_name('root').casefold():
-                path = 'root'
-            return path=='root'
-        elif platform.os!=platform.Os.Windows:
-            return path=='root' or (pa:=pathlib.Path(path).absolute())==pathlib.Path(pa.anchor)
+    def _is_root(self, path: str | pathlib.Path):
+        if platform.os == platform.Os.Windows and isinstance(path, str):
+            if path.casefold() == self._get_path_display_name("root").casefold():
+                path = "root"
+            return path == "root"
+        if platform.os != platform.Os.Windows:
+            return path == "root" or (pa := pathlib.Path(path).absolute()) == pathlib.Path(pa.anchor)
         return False
 
-
-    def set_dir(self, paths: str|pathlib.Path|list[str|pathlib.Path]):
-        if not isinstance(paths,list):
+    def set_dir(self, paths: str | pathlib.Path | list[str | pathlib.Path]):
+        if not isinstance(paths, list):
             paths = [paths]
         paths = [pathlib.Path(p) for p in paths]
 
-        if len(paths)==1 and paths[0].is_dir():
+        if len(paths) == 1 and paths[0].is_dir():
             self.goto(paths[0])
         else:
             self.select_when_loaded = paths
             self.goto(paths[0].parent)
 
-    def goto(self, path: str | pathlib.Path, add_history=True, request_highlight: pathlib.Path=None):
+    def goto(self, path: str | pathlib.Path, add_history=True, request_highlight: pathlib.Path = None):
         is_root = self._is_root(path)
 
         if not is_root:
-            if platform.os==platform.Os.Windows and (comp := file_actions.get_net_computer(path)):
+            if platform.os == platform.Os.Windows and (comp := file_actions.get_net_computer(path)):
                 # ensure loc has the format //SERVER/, which is what pathlib understands
                 # but keep it as a string, these things don't round-trip in pathlib
-                path = f'//{comp}/'
+                path = f"//{comp}/"
             else:
                 path = pathlib.Path(path).expanduser().resolve()
                 if path.is_file():
                     path = path.parent
                 if path is None:
-                    path = pathlib.Path('.')
-                if not str(path).startswith('\\\\') or str(path).startswith('//'):
+                    path = pathlib.Path()
+                if not str(path).startswith("\\\\") or str(path).startswith("//"):
                     # don't call resolve on network paths
                     path = path.resolve()
         else:
-            path = 'root'
+            path = "root"
 
-        if path!=self.loc:
+        if path != self.loc:
             self.loc = path
             self.new_loc = True
             if request_highlight:
                 # determine if requested highlight is a sub-folder/-file of the new location. Ignore if not
-                self.request_highlight = request_highlight if self._get_parent(request_highlight)==self.loc else None
+                self.request_highlight = request_highlight if self._get_parent(request_highlight) == self.loc else None
             if add_history:
-                if self.history_loc>=0:
+                if self.history_loc >= 0:
                     # remove any history after current, as we're appending a new location
-                    del self.history[self.history_loc+1:]
+                    del self.history[self.history_loc + 1 :]
                 self.history.append(self.loc)
                 self.history_loc += 1
             # changing location clears selection
             with self.items_lock:
                 utils.set_all(self.selected, False)
             # changing location clear filter box
-            self.filter_box_text = ''
+            self.filter_box_text = ""
             # load from cache if available
             if self.loc in self._listing_cache:
                 self._update_listing(self.loc, True)
@@ -196,16 +207,19 @@ class FilePicker:
         self.refreshing = True
         self._request_listing(self.loc)
 
-    def _request_listing(self, path: str|pathlib.Path):
+    def _request_listing(self, path: str | pathlib.Path):
         self.file_action_provider.get_listing(path)
 
-    def _listing_done(self, path: str|pathlib.Path, items: list[file_actions.DirEntry]|Exception):
+    def _listing_done(self, path: str | pathlib.Path, items: list[file_actions.DirEntry] | Exception):
         # deal with cache
         if not isinstance(items, Exception):
-            items = {i:DirEntryWithCache(item) for i,item in enumerate(natsort.os_sorted(items, key=lambda i: i.full_path))}
+            items = {
+                i: DirEntryWithCache(item)
+                for i, item in enumerate(natsort.os_sorted(items, key=lambda i: i.full_path))
+            }
         self._listing_cache[path] = items
 
-        if str(path)==str(self.loc):
+        if str(path) == str(self.loc):
             # also load all parent paths if not in cache already, so path bar
             # drop downs work
             loc = self.loc
@@ -217,14 +231,14 @@ class FilePicker:
             # and update the shown listing
             self._update_listing(path, False)
 
-    def _update_listing(self, path: str|pathlib.Path, from_cache: bool):
+    def _update_listing(self, path: str | pathlib.Path, from_cache: bool):
         previously_selected = []
         with self.items_lock:
             if self.select_when_loaded:
                 previously_selected = self.select_when_loaded
                 self.select_when_loaded = None
             elif not self.new_loc:
-                previously_selected = [self.items[iid].full_path for iid in self.items if iid in self.selected and self.selected[iid]]
+                previously_selected = [self.items[iid].full_path for iid in self.items if self.selected.get(iid)]
             self.items.clear()
             self.selected.clear()
             self.msg = None
@@ -233,7 +247,7 @@ class FilePicker:
                 self.msg = f"Cannot open this folder!\n:{items}"
             else:
                 self.items = items.copy()
-                self.selected = {k:False for k in self.items}
+                self.selected = dict.fromkeys(self.items, False)
 
         # if refreshed the same directory, restore old selection
         self._select_paths(previously_selected)
@@ -246,28 +260,33 @@ class FilePicker:
             self.refreshing = False
             self.elapsed = 0.0
 
-    def _launch_action(self, action: str, path: str|pathlib.Path, path2: str|pathlib.Path = None):
+    def _launch_action(self, action: str, path: str | pathlib.Path, path2: str | pathlib.Path = None):
         match action:
-            case 'make_dir':
+            case "make_dir":
                 self.file_action_provider.make_dir(path)
-            case 'rename_path':
+            case "rename_path":
                 self.file_action_provider.rename_path(path, path2)
 
-    def _action_done(self, path: pathlib.Path, action: str, result: None|pathlib.Path|Exception):
+    def _action_done(self, path: pathlib.Path, action: str, result: None | pathlib.Path | Exception):
         if isinstance(result, Exception):
             match action:
-                case 'make_dir':
-                    action_lbl = 'making the folder'
-                case 'rename_path':
-                    action_lbl = 'renaming the folder or file'
-            gui_utils.push_popup(self, msg_box.msgbox, "Action error", f'Something went wrong {action_lbl} {path}":\n{result}', msg_box.MsgBox.error)
+                case "make_dir":
+                    action_lbl = "making the folder"
+                case "rename_path":
+                    action_lbl = "renaming the folder or file"
+            gui_utils.push_popup(
+                self,
+                msg_box.msgbox,
+                "Action error",
+                f'Something went wrong {action_lbl} {path}":\n{result}',
+                msg_box.MsgBox.error,
+            )
 
         # trigger refresh of parent path where actions occurred
         self._request_listing(path.parent)
         # if there is a result path and it has a different parent than the action path, refresh that one too
-        if isinstance(result, pathlib.Path) and result.parent!=path.parent:
+        if isinstance(result, pathlib.Path) and result.parent != path.parent:
             self._request_listing(result.parent)
-
 
     def _select_paths(self, paths: list[pathlib.Path]):
         got_one = False
@@ -275,7 +294,7 @@ class FilePicker:
             for path in paths:
                 for iid in self.items:
                     entry = self.items[iid]
-                    if entry.full_path==path and (not self.predicate_selectable or self.predicate_selectable(iid)):
+                    if entry.full_path == path and (not self.predicate_selectable or self.predicate_selectable(iid)):
                         self.selected[iid] = True
                         got_one = True
                         break
@@ -284,66 +303,70 @@ class FilePicker:
 
     def _dir_picker_is_current_dir_selected(self):
         with self.items_lock:
-            any_selected = any((self.selected[iid] for iid in self.selected))
+            any_selected = any(self.selected[iid] for iid in self.selected)
         return self._is_dir_picker and not any_selected and not self._is_root(self.loc)
 
     def _get_parent(self, path: str | pathlib.Path):
-        if isinstance(path,str) and path=='root':
+        if isinstance(path, str) and path == "root":
             return None
-        if not isinstance(path,pathlib.Path):
+        if not isinstance(path, pathlib.Path):
             path = pathlib.Path(path)
         parent = path.parent
         # on Posix we check if the parent is the fs anchor, that means the parent is root
         # on Windows, there is a level above the fs anchor, so we check if the current path (and not its parent) is the anchor
-        to_check = pathlib.Path(path) if platform.os==platform.Os.Windows else parent
-        if to_check==pathlib.Path(path.anchor):
-            if isinstance(path,pathlib.PureWindowsPath):
-                if platform.os==platform.Os.Windows and (net_comps := file_actions.split_network_path(path)):
-                    if len(net_comps)==1:
+        to_check = pathlib.Path(path) if platform.os == platform.Os.Windows else parent
+        if to_check == pathlib.Path(path.anchor):
+            if isinstance(path, pathlib.PureWindowsPath):
+                if platform.os == platform.Os.Windows and (net_comps := file_actions.split_network_path(path)):
+                    if len(net_comps) == 1:
                         # network computer, one higher is list of drives and
                         # visible network computers, i.e., root
-                        parent = 'root'
+                        parent = "root"
                     else:
-                        parent = pathlib.Path(f'//{"/".join(net_comps[:-1])}/')
+                        parent = pathlib.Path(f"//{'/'.join(net_comps[:-1])}/")
                 else:
                     # if a normal local path, then this means we're in a drive root
-                    parent = 'root'
+                    parent = "root"
             else:
                 # non-Windows logic: simply root
-                parent = 'root'
+                parent = "root"
         return parent
 
     def _get_path_display_name(self, path: str | pathlib.Path, for_edit=False):
         path_str = str(path)
-        if path_str=='root' or self._is_root(path):
+        if path_str == "root" or self._is_root(path):
             loc_str = self.file_action_provider.local_name
-        else:
-            if platform.os==platform.Os.Windows:
-                if (comp := file_actions.get_net_computer(path_str)):
-                    # pathlib.Path's str() doesn't do the right thing here, render it ourselves
-                    loc_str = f'\\\\{comp}'
-                else:
-                    if not for_edit and isinstance(path,pathlib.Path) and self._get_parent(path)=='root' and 'root' in self._listing_cache and isinstance(self._listing_cache['root'],dict):
-                        # this is a drive root, lookup name of this drive
-                        # except when this is meant to be a string to be edited, then we
-                        # just want the raw drive location string
-                        loc_str = None
-                        for _,l in self._listing_cache['root'].items():
-                            if l.full_path==path:
-                                loc_str = l.name
-                        if loc_str is None:
-                            loc_str = path.drive
-                    else:
-                        loc_str = path_str
+        elif platform.os == platform.Os.Windows:
+            if comp := file_actions.get_net_computer(path_str):
+                # pathlib.Path's str() doesn't do the right thing here, render it ourselves
+                loc_str = f"\\\\{comp}"
+            elif (
+                not for_edit
+                and isinstance(path, pathlib.Path)
+                and self._get_parent(path) == "root"
+                and "root" in self._listing_cache
+                and isinstance(self._listing_cache["root"], dict)
+            ):
+                # this is a drive root, lookup name of this drive
+                # except when this is meant to be a string to be edited, then we
+                # just want the raw drive location string
+                loc_str = None
+                for _, l in self._listing_cache["root"].items():
+                    if l.full_path == path:
+                        loc_str = l.name
+                if loc_str is None:
+                    loc_str = path.drive
             else:
-                loc_str = path.name if not for_edit else path_str
+                loc_str = path_str
+        else:
+            loc_str = path.name if not for_edit else path_str
         return loc_str
 
     def _get_path_leaf_display_name(self, path: str | pathlib.Path):
-        if isinstance(path, pathlib.Path) and self._get_parent(path)!='root':
-            if platform.os==platform.Os.Windows and (net_comps := file_actions.split_network_path(path)):
-                if len(net_comps)==1:
-                    disp_name = f'\\\\{net_comps[0]}'
+        if isinstance(path, pathlib.Path) and self._get_parent(path) != "root":
+            if platform.os == platform.Os.Windows and (net_comps := file_actions.split_network_path(path)):
+                if len(net_comps) == 1:
+                    disp_name = f"\\\\{net_comps[0]}"
                 else:
                     disp_name = net_comps[-1]
             else:
@@ -356,11 +379,10 @@ class FilePicker:
             disp_name = self._get_path_display_name(path)
         return disp_name
 
-
     def draw(self):
         cancelled = closed = False
 
-        imgui.begin_child('##filepicker')
+        imgui.begin_child("##filepicker")
         self.draw_top_bar()
         closed = self.draw_listing(leave_space_for_bottom_bar=True)
         cancelled, closed2 = self.draw_bottom_bar()
@@ -372,93 +394,126 @@ class FilePicker:
     def draw_top_bar(self):
         self.elapsed += imgui.get_io().delta_time
 
-        enable_keyboard_nav = not self.popup_stack and not self.disable_keyboard_navigation and not imgui.get_io().want_text_input   # no keyboard navigation in this GUI if a popup is open or key input taken elsewhere
-        backspace_released  = imgui.is_key_pressed(imgui.Key.backspace)
-        shift_down          = imgui.is_key_down(imgui.Key.mod_shift)
+        enable_keyboard_nav = (
+            not self.popup_stack and not self.disable_keyboard_navigation and not imgui.get_io().want_text_input
+        )  # no keyboard navigation in this GUI if a popup is open or key input taken elsewhere
+        backspace_released = imgui.is_key_pressed(imgui.Key.backspace)
+        shift_down = imgui.is_key_down(imgui.Key.mod_shift)
 
         imgui.begin_group()
         # History back button
-        disabled = self.history_loc<=0
+        disabled = self.history_loc <= 0
         if disabled:
             imgui.begin_disabled()
-        if imgui.button(ifa6.ICON_FA_ARROW_LEFT) or (not disabled and enable_keyboard_nav and backspace_released and not shift_down):
+        if imgui.button(ifa6.ICON_FA_ARROW_LEFT) or (
+            not disabled and enable_keyboard_nav and backspace_released and not shift_down
+        ):
             self.history_loc -= 1
-            self.goto(self.history[self.history_loc], add_history=False, request_highlight=self.history[self.history_loc+1])
-        if self.history_loc>0: # don't just use disabled var as we may have just changed self.history_loc
-            gui_utils.draw_hover_text(self._get_path_display_name(self.history[self.history_loc-1]), '')
-            if imgui.begin_popup_context_item(f"##history_back_context"):
-                for i in range(self.history_loc-1,-1,-1):
+            self.goto(
+                self.history[self.history_loc], add_history=False, request_highlight=self.history[self.history_loc + 1]
+            )
+        if self.history_loc > 0:  # don't just use disabled var as we may have just changed self.history_loc
+            gui_utils.draw_hover_text(self._get_path_display_name(self.history[self.history_loc - 1]), "")
+            if imgui.begin_popup_context_item("##history_back_context"):
+                for i in range(self.history_loc - 1, -1, -1):
                     p = self.history[i]
                     if imgui.selectable(self._get_path_display_name(p), False)[0]:
                         self.history_loc = i
-                        self.goto(p, add_history=False, request_highlight=self.history[i+1])
+                        self.goto(p, add_history=False, request_highlight=self.history[i + 1])
                 imgui.end_popup()
         if disabled:
             imgui.end_disabled()
         # History forward button
-        imgui.same_line(spacing=imgui.get_style().item_spacing.x/4)
-        disabled = self.history_loc+1>=len(self.history)
+        imgui.same_line(spacing=imgui.get_style().item_spacing.x / 4)
+        disabled = self.history_loc + 1 >= len(self.history)
         if disabled:
             imgui.begin_disabled()
-        if imgui.button(ifa6.ICON_FA_ARROW_RIGHT) or (not disabled and enable_keyboard_nav and backspace_released and shift_down):
+        if imgui.button(ifa6.ICON_FA_ARROW_RIGHT) or (
+            not disabled and enable_keyboard_nav and backspace_released and shift_down
+        ):
             self.history_loc += 1
-            self.goto(self.history[self.history_loc], add_history=False, request_highlight=self.history[self.history_loc+1] if len(self.history)>=self.history_loc else None)
-        if self.history_loc+1<len(self.history): # don't just use disabled var as we may have just changed self.history_loc
-            gui_utils.draw_hover_text(self._get_path_display_name(self.history[self.history_loc+1]), '')
-            if imgui.begin_popup_context_item(f"##history_forward_context"):
-                for i in range(self.history_loc+1,len(self.history)):
+            self.goto(
+                self.history[self.history_loc],
+                add_history=False,
+                request_highlight=self.history[self.history_loc + 1]
+                if len(self.history) >= self.history_loc
+                else None,
+            )
+        if self.history_loc + 1 < len(
+            self.history
+        ):  # don't just use disabled var as we may have just changed self.history_loc
+            gui_utils.draw_hover_text(self._get_path_display_name(self.history[self.history_loc + 1]), "")
+            if imgui.begin_popup_context_item("##history_forward_context"):
+                for i in range(self.history_loc + 1, len(self.history)):
                     p = self.history[i]
                     if imgui.selectable(self._get_path_display_name(p), False)[0]:
                         self.history_loc = i
-                        self.goto(p, add_history=False, request_highlight=self.history[self.history_loc+1] if len(self.history)>=self.history_loc else None)
+                        self.goto(
+                            p,
+                            add_history=False,
+                            request_highlight=self.history[self.history_loc + 1]
+                            if len(self.history) >= self.history_loc
+                            else None,
+                        )
                 imgui.end_popup()
         if disabled:
             imgui.end_disabled()
         # Up button
-        imgui.same_line(spacing=imgui.get_style().item_spacing.x/4)
+        imgui.same_line(spacing=imgui.get_style().item_spacing.x / 4)
         parent = self._get_parent(self.loc)
-        disabled = parent is None or self.loc==parent
+        disabled = parent is None or self.loc == parent
         if disabled:
             imgui.begin_disabled()
         if imgui.button(ifa6.ICON_FA_ARROW_UP):
             self.goto(parent)
         if not disabled:
-            gui_utils.draw_hover_text(self._get_path_display_name(parent), '')
+            gui_utils.draw_hover_text(self._get_path_display_name(parent), "")
         if disabled:
             imgui.end_disabled()
         # Refresh button
-        imgui.same_line(spacing=imgui.get_style().item_spacing.x/2)
+        imgui.same_line(spacing=imgui.get_style().item_spacing.x / 2)
         if self.refreshing:
             button_text_size = imgui.calc_text_size(ifa6.ICON_FA_ARROW_ROTATE_RIGHT)
-            button_size = (button_text_size.x+imgui.get_style().frame_padding.x*2, button_text_size.y+imgui.get_style().frame_padding.y*2)
-            symbol_size = imgui.calc_text_size("x").y/2
-            spinner_radii = [x/22*symbol_size for x in [22, 16, 10]]
-            lw = 3.5/22*symbol_size
-            spinner_diam = 2*spinner_radii[0]+lw
-            offset_x = (button_size[0]-spinner_diam)/2
+            button_size = (
+                button_text_size.x + imgui.get_style().frame_padding.x * 2,
+                button_text_size.y + imgui.get_style().frame_padding.y * 2,
+            )
+            symbol_size = imgui.calc_text_size("x").y / 2
+            spinner_radii = [x / 22 * symbol_size for x in [22, 16, 10]]
+            lw = 3.5 / 22 * symbol_size
+            spinner_diam = 2 * spinner_radii[0] + lw
+            offset_x = (button_size[0] - spinner_diam) / 2
             cp = imgui.get_cursor_pos()
-            imgui.set_cursor_pos_x(cp.x+offset_x)
-            imspinner.spinner_ang_triple(f'loadingSpinner', *spinner_radii, lw, c1=imgui.get_style().color_(imgui.Col_.text_selected_bg), c2=imgui.get_style().color_(imgui.Col_.text), c3=imgui.get_style().color_(imgui.Col_.text_selected_bg))
+            imgui.set_cursor_pos_x(cp.x + offset_x)
+            imspinner.spinner_ang_triple(
+                "loadingSpinner",
+                *spinner_radii,
+                lw,
+                c1=imgui.get_style().color_(imgui.Col_.text_selected_bg),
+                c2=imgui.get_style().color_(imgui.Col_.text),
+                c3=imgui.get_style().color_(imgui.Col_.text_selected_bg),
+            )
             imgui.set_cursor_pos(cp)
             imgui.dummy(button_size)
-            gui_utils.draw_hover_text(text='', hover_text='Refreshing...')
-        else:
-            if imgui.button(ifa6.ICON_FA_ARROW_ROTATE_RIGHT):
-                self.refresh()
+            gui_utils.draw_hover_text(text="", hover_text="Refreshing...")
+        elif imgui.button(ifa6.ICON_FA_ARROW_ROTATE_RIGHT):
+            self.refresh()
         # Location bar
-        imgui.same_line(spacing=imgui.get_style().item_spacing.x/2)
+        imgui.same_line(spacing=imgui.get_style().item_spacing.x / 2)
         # determine size
         space = imgui.get_content_region_avail().x
-        if space>250/.3*hello_imgui.dpi_window_size_factor():
-            filt_space = 250*hello_imgui.dpi_window_size_factor()
+        if space > 250 / 0.3 * hello_imgui.dpi_window_size_factor():
+            filt_space = 250 * hello_imgui.dpi_window_size_factor()
         else:
-            filt_space = int(space*.3)
+            filt_space = int(space * 0.3)
         imgui.set_next_item_width(-filt_space)
         self.draw_path_bar()
         # filter box
-        imgui.same_line(spacing=imgui.get_style().item_spacing.x/2)
+        imgui.same_line(spacing=imgui.get_style().item_spacing.x / 2)
         imgui.set_next_item_width(imgui.get_content_region_avail().x)
-        _, value = imgui.input_text_with_hint('##filter_box', f'Filter {self._get_path_leaf_display_name(self.loc)}', self.filter_box_text)
+        _, value = imgui.input_text_with_hint(
+            "##filter_box", f"Filter {self._get_path_leaf_display_name(self.loc)}", self.filter_box_text
+        )
         if value != self.filter_box_text:
             self.filter_box_text = value
             self.require_sort = True
@@ -470,92 +525,100 @@ class FilePicker:
         if win.skip_items:
             return
 
-        iid = win.get_id('##path_bar')
-        state = win.state_storage.get_int_ref(iid, 0)   # bit 1: button mode?, bit 2: hovered?, bit 3: set keyboard focus
+        iid = win.get_id("##path_bar")
+        state = win.state_storage.get_int_ref(
+            iid, 0
+        )  # bit 1: button mode?, bit 2: hovered?, bit 3: set keyboard focus
 
         ctx = imgui.get_current_context()
         w = imgui.calc_item_width()
-        ts = imgui.calc_text_size('x')
+        ts = imgui.calc_text_size("x")
         pos = imgui.get_cursor_screen_pos()
         ui_pos = imgui.get_cursor_pos()
-        bb = imgui.internal.ImRect(pos, (pos.x+w, pos.y+ts.y+2*imgui.get_style().frame_padding.y))
+        bb = imgui.internal.ImRect(pos, (pos.x + w, pos.y + ts.y + 2 * imgui.get_style().frame_padding.y))
 
         if not state & 0b001:
             # buttons
             imgui.push_clip_rect(bb.min, bb.max, False)
-            hovered = ctx.io.mouse_pos.x >= bb.min.x and ctx.io.mouse_pos.x <= bb.max.x and \
-                      ctx.io.mouse_pos.y >= bb.min.y and ctx.io.mouse_pos.y <= bb.max.y
+            hovered = (
+                ctx.io.mouse_pos.x >= bb.min.x
+                and ctx.io.mouse_pos.x <= bb.max.x
+                and ctx.io.mouse_pos.y >= bb.min.y
+                and ctx.io.mouse_pos.y <= bb.max.y
+            )
             clicked = hovered and imgui.is_mouse_released(imgui.MouseButton_.left)
-            path_element_hc = False # are any other of the path boxes hovered or clicked?
+            path_element_hc = False  # are any other of the path boxes hovered or clicked?
             frame_col = imgui.get_color_u32(imgui.Col_.frame_bg_hovered if state & 0b010 else imgui.Col_.frame_bg)
-            imgui.internal.render_frame(bb.min,bb.max,frame_col,True,imgui.get_style().frame_rounding)
+            imgui.internal.render_frame(bb.min, bb.max, frame_col, True, imgui.get_style().frame_rounding)
 
             # get path components
             make_elem = lambda x, lbl: (lbl, x, imgui.calc_text_size(x).x)
-            separator = '>'
+            separator = ">"
             btn_list = []
             loc = self.loc
             while loc:
                 btn_list.append(make_elem(self._get_path_leaf_display_name(loc), loc))
-                btn_list.append(make_elem(separator, 'sep'))
+                btn_list.append(make_elem(separator, "sep"))
                 loc = self._get_parent(loc)
-            del btn_list[-1]    # remove last separator
+            del btn_list[-1]  # remove last separator
             btn_list.reverse()
             # simply show local machine as an icon, show name upon hover
             btn_list[0] = (btn_list[0][0], (ifa6.ICON_FA_DESKTOP, btn_list[0][1]), btn_list[0][2])
 
             # check if whole path fits, else shorten
-            get_total_width = lambda x: sum([b[2] for b in x]) + len(btn_list)*2*imgui.get_style().frame_padding.x
+            get_total_width = lambda x: sum([b[2] for b in x]) + len(btn_list) * 2 * imgui.get_style().frame_padding.x
             total_width = get_total_width(btn_list)
             btn_removed = []
-            if total_width>w:
-                ellipsis = make_elem('···', 'ellipsis')
+            if total_width > w:
+                ellipsis = make_elem("···", "ellipsis")
                 btn_list.insert(1, ellipsis)
-                while total_width>w:
-                    if len(btn_list)<=4:
+                while total_width > w:
+                    if len(btn_list) <= 4:
                         # nothing more that can be removed
                         break
                     btn_removed.append(btn_list.pop(3))
-                    del btn_list[3] # also remove separator that follows
+                    del btn_list[3]  # also remove separator that follows
                     total_width = get_total_width(btn_list)
 
             # draw buttons on the frame
             imgui.push_style_var(imgui.StyleVar_.item_spacing, (0, imgui.get_style().item_spacing.y))
             imgui.push_style_var(imgui.StyleVar_.frame_border_size, 0)
             open_popup = False
-            for i,b in enumerate(btn_list):
-                id_str      = f'###path_comp_{i}'
-                button_pos  = imgui.get_cursor_screen_pos()
+            for i, b in enumerate(btn_list):
+                id_str = f"###path_comp_{i}"
+                button_pos = imgui.get_cursor_screen_pos()
                 lbl = b[1]
                 hover = None
                 if isinstance(lbl, tuple):
                     hover = lbl[1]
                     lbl = lbl[0]
-                if 'which' in self.path_bar_popup and \
-                    self.path_bar_popup['which']==i-1 and \
-                    imgui.is_popup_open('##dir_list_popup'):
-                    lbl = 'v'
+                if (
+                    "which" in self.path_bar_popup
+                    and self.path_bar_popup["which"] == i - 1
+                    and imgui.is_popup_open("##dir_list_popup")
+                ):
+                    lbl = "v"
                 clicked_button = False
-                if lbl=='>':
-                    clicked_button = imgui.arrow_button(id_str,imgui.Dir_.right)
-                elif lbl=='v':
-                    clicked_button = imgui.arrow_button(id_str,imgui.Dir_.down)
+                if lbl == ">":
+                    clicked_button = imgui.arrow_button(id_str, imgui.Dir_.right)
+                elif lbl == "v":
+                    clicked_button = imgui.arrow_button(id_str, imgui.Dir_.down)
                 else:
-                    clicked_button = imgui.button(lbl+id_str)
+                    clicked_button = imgui.button(lbl + id_str)
                 if clicked_button:
-                    if isinstance(b[0],str):
-                        if b[0]=='sep':
+                    if isinstance(b[0], str):
+                        if b[0] == "sep":
                             # path separator button, enqueue opening path selection dropdown
-                            self.path_bar_popup['loc'] = self._get_parent(btn_list[i+1][0])
-                            self.path_bar_popup['which'] = i-1
-                            self.path_bar_popup['which_selected'] = btn_list[i+1][1]
-                            self.path_bar_popup['pos'] = button_pos
+                            self.path_bar_popup["loc"] = self._get_parent(btn_list[i + 1][0])
+                            self.path_bar_popup["which"] = i - 1
+                            self.path_bar_popup["which_selected"] = btn_list[i + 1][1]
+                            self.path_bar_popup["pos"] = button_pos
                             open_popup = True
-                        elif b[0]=='ellipsis':
+                        elif b[0] == "ellipsis":
                             # draw dropdown with removed paths
-                            self.path_bar_popup['loc'] = 'ellipsis'
-                            self.path_bar_popup['which'] = None
-                            self.path_bar_popup['pos'] = button_pos
+                            self.path_bar_popup["loc"] = "ellipsis"
+                            self.path_bar_popup["which"] = None
+                            self.path_bar_popup["pos"] = button_pos
                             open_popup = True
                         else:
                             self.goto(b[0])
@@ -563,7 +626,7 @@ class FilePicker:
                         self.goto(b[0])
                 path_element_hc = path_element_hc or imgui.is_item_hovered() or imgui.is_item_clicked()
                 if hover:
-                    gui_utils.draw_hover_text(hover, '')
+                    gui_utils.draw_hover_text(hover, "")
                 imgui.same_line()
             imgui.pop_style_var(2)
             imgui.pop_clip_rect()
@@ -571,39 +634,44 @@ class FilePicker:
             do_open_popup = False
             if open_popup:
                 # directory selector
-                if (isinstance(self.path_bar_popup['loc'],str) and self.path_bar_popup['loc']=='ellipsis') or \
-                    (self.path_bar_popup['loc'] in self._listing_cache and isinstance(self._listing_cache[self.path_bar_popup['loc']], dict)):
-                    imgui.open_popup('##dir_list_popup')
+                if (isinstance(self.path_bar_popup["loc"], str) and self.path_bar_popup["loc"] == "ellipsis") or (
+                    self.path_bar_popup["loc"] in self._listing_cache
+                    and isinstance(self._listing_cache[self.path_bar_popup["loc"]], dict)
+                ):
+                    imgui.open_popup("##dir_list_popup")
                     do_open_popup = True
             if do_open_popup:
                 # position popup: move button height down so it pops under the button
-                self.path_bar_popup['pos'].y += imgui.calc_text_size('x').y+2*imgui.get_style().frame_padding.y+imgui.get_style().item_spacing.y
-                imgui.set_next_window_pos(self.path_bar_popup['pos'])
-            if imgui.begin_popup('##dir_list_popup'):
-                key = self.path_bar_popup['loc']
+                self.path_bar_popup["pos"].y += (
+                    imgui.calc_text_size("x").y
+                    + 2 * imgui.get_style().frame_padding.y
+                    + imgui.get_style().item_spacing.y
+                )
+                imgui.set_next_window_pos(self.path_bar_popup["pos"])
+            if imgui.begin_popup("##dir_list_popup"):
+                key = self.path_bar_popup["loc"]
                 if key in self._listing_cache:
                     items = self._listing_cache[key]
                     items = [items[i] for i in items if items[i].is_dir]
-                    paths         = [i.full_path for i in items]
+                    paths = [i.full_path for i in items]
                     display_names = [self._get_path_leaf_display_name(p) for p in paths]
-                    idx = display_names.index(self.path_bar_popup['which_selected'])
-                elif isinstance(key,str) and key=='ellipsis':
+                    idx = display_names.index(self.path_bar_popup["which_selected"])
+                elif isinstance(key, str) and key == "ellipsis":
                     display_names = [b[1] for b in btn_removed]
                     paths = [b[0] for b in btn_removed]
                     display_names.reverse()
                     paths.reverse()
                     idx = -1
-                changed, idx = imgui.list_box('##dir_list_popup_select',idx,display_names)
+                changed, idx = imgui.list_box("##dir_list_popup_select", idx, display_names)
                 if changed:
                     self.goto(paths[idx])
                     imgui.close_current_popup()
                 imgui.end_popup()
 
-
             # click state
             if not path_element_hc and clicked:
                 state |= 0b001
-                state &= 0b011      # remove SetKeyboardFocus flag
+                state &= 0b011  # remove SetKeyboardFocus flag
             else:
                 state &= 0b110
             # hover state
@@ -624,7 +692,7 @@ class FilePicker:
                     state |= 0b100
 
             loc_str = self._get_path_display_name(self.loc, for_edit=True)
-            confirmed, loc = imgui.input_text("##pathbox_input",loc_str,imgui.InputTextFlags_.enter_returns_true)
+            confirmed, loc = imgui.input_text("##pathbox_input", loc_str, imgui.InputTextFlags_.enter_returns_true)
             if confirmed:
                 self.goto(loc)
             if not skip_active_check and not imgui.is_item_active():
@@ -636,19 +704,19 @@ class FilePicker:
         cancelled = closed = False
 
         # Cancel button
-        if imgui.button(ifa6.ICON_FA_CIRCLE_XMARK+" Cancel"):
+        if imgui.button(ifa6.ICON_FA_CIRCLE_XMARK + " Cancel"):
             imgui.close_current_popup()
             cancelled = closed = True
         # Ok button
         imgui.same_line()
         with self.items_lock:
-            selected = [self.items[iid] for iid in self.items if iid in self.selected and self.selected[iid]]
+            selected = [self.items[iid] for iid in self.items if self.selected.get(iid)]
         num_selected = len(selected)
         dir_picker_selected = self._dir_picker_is_current_dir_selected()
-        disable_ok = not num_selected and not dir_picker_selected or (self.refreshing and self.new_loc)
+        disable_ok = (not num_selected and not dir_picker_selected) or (self.refreshing and self.new_loc)
         if disable_ok:
             imgui.begin_disabled()
-        if imgui.button(ifa6.ICON_FA_CHECK+" Ok"):
+        if imgui.button(ifa6.ICON_FA_CHECK + " Ok"):
             imgui.close_current_popup()
             closed = True
         if disable_ok:
@@ -657,8 +725,10 @@ class FilePicker:
         imgui.same_line()
         if dir_picker_selected:
             imgui.text(f"  Selected the current directory ({self._get_path_leaf_display_name(self.loc)})")
-        elif num_selected==1:
-            imgui.text(f"  Selected {num_selected} item ({'directory' if selected[0].is_dir else 'file'} '{selected[0].name}')")
+        elif num_selected == 1:
+            imgui.text(
+                f"  Selected {num_selected} item ({'directory' if selected[0].is_dir else 'file'} '{selected[0].name}')"
+            )
         else:
             imgui.text(f"  Selected {num_selected} items")
 
@@ -668,50 +738,75 @@ class FilePicker:
         closed = False
         size = imgui.ImVec2(imgui.get_item_rect_size().x, 0)
         if leave_space_for_bottom_bar:
-            button_text_size = imgui.calc_text_size(ifa6.ICON_FA_CIRCLE_XMARK+" Cancel")
-            bottom_margin = button_text_size.y+imgui.get_style().frame_padding.y*2+imgui.get_style().item_spacing.y
+            button_text_size = imgui.calc_text_size(ifa6.ICON_FA_CIRCLE_XMARK + " Cancel")
+            bottom_margin = (
+                button_text_size.y + imgui.get_style().frame_padding.y * 2 + imgui.get_style().item_spacing.y
+            )
             size.y = -bottom_margin
         imgui.begin_child("##folder_contents", size=size)
         if self.refreshing and self.new_loc:
-            string = 'loading directory...'
+            string = "loading directory..."
             t_size = imgui.calc_text_size(string)
             symbol_size = imgui.calc_text_size("x").y
-            spinner_radii = [x/22*symbol_size for x in [22, 16, 10]]
-            lw = 3.5/22*symbol_size
-            tot_height = t_size.y+2*spinner_radii[0]+lw
-            imgui.set_cursor_pos(((imgui.get_content_region_avail().x - t_size.x)/2, (imgui.get_content_region_avail().y - tot_height)/2))
+            spinner_radii = [x / 22 * symbol_size for x in [22, 16, 10]]
+            lw = 3.5 / 22 * symbol_size
+            tot_height = t_size.y + 2 * spinner_radii[0] + lw
+            imgui.set_cursor_pos((
+                (imgui.get_content_region_avail().x - t_size.x) / 2,
+                (imgui.get_content_region_avail().y - tot_height) / 2,
+            ))
             imgui.text(string)
-            imgui.set_cursor_pos_x((imgui.get_content_region_avail().x - 2*spinner_radii[0]+lw)/2)
-            imspinner.spinner_ang_triple(f'loadingSpinner', *spinner_radii, lw, c1=imgui.get_style().color_(imgui.Col_.text_selected_bg), c2=imgui.get_style().color_(imgui.Col_.text), c3=imgui.get_style().color_(imgui.Col_.text_selected_bg))
+            imgui.set_cursor_pos_x((imgui.get_content_region_avail().x - 2 * spinner_radii[0] + lw) / 2)
+            imspinner.spinner_ang_triple(
+                "loadingSpinner",
+                *spinner_radii,
+                lw,
+                c1=imgui.get_style().color_(imgui.Col_.text_selected_bg),
+                c2=imgui.get_style().color_(imgui.Col_.text),
+                c3=imgui.get_style().color_(imgui.Col_.text_selected_bg),
+            )
         elif self.msg:
             imgui.text_wrapped(self.msg)
         else:
             # do we have context menus?
             # not for special paths (which are strings) and not for share overviews of a network computer
-            net_comps = file_actions.get_net_computer(self.loc) if platform.os==platform.Os.Windows else None
-            has_context_menu = not isinstance(self.loc, str) and (not net_comps or len(net_comps)>1)
+            net_comps = file_actions.get_net_computer(self.loc) if platform.os == platform.Os.Windows else None
+            has_context_menu = not isinstance(self.loc, str) and (not net_comps or len(net_comps) > 1)
 
             table_flags = (
-                imgui.TableFlags_.scroll_x |
-                imgui.TableFlags_.scroll_y |
-                imgui.TableFlags_.hideable |
-                imgui.TableFlags_.sortable |
-                imgui.TableFlags_.sort_multi |
-                imgui.TableFlags_.reorderable |
-                imgui.TableFlags_.sizing_fixed_fit |
-                imgui.TableFlags_.no_host_extend_y
+                imgui.TableFlags_.scroll_x
+                | imgui.TableFlags_.scroll_y
+                | imgui.TableFlags_.hideable
+                | imgui.TableFlags_.sortable
+                | imgui.TableFlags_.sort_multi
+                | imgui.TableFlags_.reorderable
+                | imgui.TableFlags_.sizing_fixed_fit
+                | imgui.TableFlags_.no_host_extend_y
             )
-            if imgui.begin_table(f"##folder_list",columns=5+self.allow_multiple,flags=table_flags):
+            if imgui.begin_table("##folder_list", columns=5 + self.allow_multiple, flags=table_flags):
                 frame_height = imgui.get_frame_height()
-                if self.reset_scroll==True:
+                if self.reset_scroll == True:
                     imgui.set_scroll_y(0)
                     self.reset_scroll = False
 
                 # Setup
-                checkbox_width = frame_height-2*imgui.get_style().frame_padding.y
+                checkbox_width = frame_height - 2 * imgui.get_style().frame_padding.y
                 if self.allow_multiple:
-                    imgui.table_setup_column("Selector", imgui.TableColumnFlags_.no_hide | imgui.TableColumnFlags_.no_sort | imgui.TableColumnFlags_.no_resize | imgui.TableColumnFlags_.no_reorder | imgui.TableColumnFlags_.no_header_label, init_width_or_weight=checkbox_width)  # 0
-                imgui.table_setup_column("Name", imgui.TableColumnFlags_.width_stretch | imgui.TableColumnFlags_.default_sort | imgui.TableColumnFlags_.no_hide)  # 1
+                    imgui.table_setup_column(
+                        "Selector",
+                        imgui.TableColumnFlags_.no_hide
+                        | imgui.TableColumnFlags_.no_sort
+                        | imgui.TableColumnFlags_.no_resize
+                        | imgui.TableColumnFlags_.no_reorder
+                        | imgui.TableColumnFlags_.no_header_label,
+                        init_width_or_weight=checkbox_width,
+                    )  # 0
+                imgui.table_setup_column(
+                    "Name",
+                    imgui.TableColumnFlags_.width_stretch
+                    | imgui.TableColumnFlags_.default_sort
+                    | imgui.TableColumnFlags_.no_hide,
+                )  # 1
                 imgui.table_setup_column("Date created", imgui.TableColumnFlags_.default_hide)  # 2
                 imgui.table_setup_column("Date modified")  # 3
                 imgui.table_setup_column("Type")  # 4
@@ -733,43 +828,58 @@ class FilePicker:
                             num_items = sum([self.predicate_selectable(iid) for iid in self.items])
                         else:
                             num_items = len(self.items)
-                        if num_selected==0:
+                        if num_selected == 0:
                             # none selected
                             multi_selected_state = -1
-                        elif num_selected==num_items:
+                        elif num_selected == num_items:
                             # all selected
                             multi_selected_state = 1
                         else:
                             # some selected
                             multi_selected_state = 0
 
-                        if multi_selected_state==0:
+                        if multi_selected_state == 0:
                             imgui.push_item_flag(imgui.internal.ItemFlagsPrivate_.mixed_value, True)
-                        clicked, new_state = gui_utils.my_checkbox("##header_checkbox", multi_selected_state==1, frame_size=(0,0), frame_padding_override=(imgui.get_style().frame_padding.x/2,0), do_vertical_align=False)
-                        if multi_selected_state==0:
+                        clicked, new_state = gui_utils.my_checkbox(
+                            "##header_checkbox",
+                            multi_selected_state == 1,
+                            frame_size=(0, 0),
+                            frame_padding_override=(imgui.get_style().frame_padding.x / 2, 0),
+                            do_vertical_align=False,
+                        )
+                        if multi_selected_state == 0:
                             imgui.pop_item_flag()
 
                         if clicked:
-                            utils.set_all(self.selected, new_state, subset=self.sorted_items, predicate=self.predicate_selectable)
-
+                            utils.set_all(
+                                self.selected, new_state, subset=self.sorted_items, predicate=self.predicate_selectable
+                            )
 
                     # Loop rows
                     override_color = self.accent_color is not None and self.bg_color is not None
                     if override_color:
-                        a=.4
-                        style_selected_row = (*tuple(a*x+(1-a)*y for x,y in zip(self.accent_color[:3],self.bg_color[:3])), 1.)
-                        a=.2
-                        style_hovered_row  = (*tuple(a*x+(1-a)*y for x,y in zip(self.accent_color[:3],self.bg_color[:3])), 1.)
+                        a = 0.4
+                        style_selected_row = (
+                            *tuple(a * x + (1 - a) * y for x, y in zip(self.accent_color[:3], self.bg_color[:3])),
+                            1.0,
+                        )
+                        a = 0.2
+                        style_hovered_row = (
+                            *tuple(a * x + (1 - a) * y for x, y in zip(self.accent_color[:3], self.bg_color[:3])),
+                            1.0,
+                        )
                     any_selectable_clicked = False
                     new_loc = None
                     last_y = None
                     if self.sorted_items and self.last_clicked_id not in self.sorted_items:
                         # default to topmost if last_clicked unknown, or no longer on screen due to filter
                         self.last_clicked_id = self.sorted_items[0]
-                    items_to_display = [iid for iid in self.sorted_items if not self.predicate_showable or self.predicate_showable(iid)]
+                    items_to_display = [
+                        iid for iid in self.sorted_items if not self.predicate_showable or self.predicate_showable(iid)
+                    ]
                     clipper = imgui.ListClipper()
                     clipper.begin(len(items_to_display))
-                    if isinstance(self.reset_scroll,pathlib.Path):
+                    if isinstance(self.reset_scroll, pathlib.Path):
                         items_list = [self.items[k].full_path for k in items_to_display]
                         try:
                             clipper.include_item_by_index(items_list.index(self.reset_scroll))
@@ -777,10 +887,10 @@ class FilePicker:
                             # item not in list, cancel
                             self.reset_scroll = False
                     while clipper.step():
-                        for iid in items_to_display[clipper.display_start:clipper.display_end]:
+                        for iid in items_to_display[clipper.display_start : clipper.display_end]:
                             imgui.table_next_row()
 
-                            if self.reset_scroll==self.items[iid].full_path:
+                            if self.reset_scroll == self.items[iid].full_path:
                                 utils.set_all(self.selected, False)
                                 self.selected[iid] = True
                                 imgui.set_scroll_here_y()
@@ -794,7 +904,7 @@ class FilePicker:
                             if disable_item:
                                 imgui.begin_disabled()
 
-                            for ci in range(5+self.allow_multiple):
+                            for ci in range(5 + self.allow_multiple):
                                 if not (imgui.table_get_column_flags(ci) & imgui.TableColumnFlags_.is_enabled):
                                     continue
                                 imgui.table_set_column_index(ci)
@@ -807,51 +917,90 @@ class FilePicker:
                                     # makes the table row only cell_padding_y/2 longer. The whole row is highlighted correctly
                                     cell_padding_y = imgui.get_style().cell_padding.y
                                     cur_pos_y = imgui.get_cursor_pos_y()
-                                    imgui.set_cursor_pos_y(cur_pos_y - cell_padding_y/2)
-                                    imgui.push_style_var(imgui.StyleVar_.frame_border_size, 0.)
-                                    imgui.push_style_var(imgui.StyleVar_.frame_padding    , (0.,0.))
-                                    imgui.push_style_var(imgui.StyleVar_.item_spacing     , (0.,cell_padding_y))
+                                    imgui.set_cursor_pos_y(cur_pos_y - cell_padding_y / 2)
+                                    imgui.push_style_var(imgui.StyleVar_.frame_border_size, 0.0)
+                                    imgui.push_style_var(imgui.StyleVar_.frame_padding, (0.0, 0.0))
+                                    imgui.push_style_var(imgui.StyleVar_.item_spacing, (0.0, cell_padding_y))
                                     if override_color:
                                         # make selectable completely transparent
-                                        imgui.push_style_color(imgui.Col_.header_active , (0., 0., 0., 0.))
-                                        imgui.push_style_color(imgui.Col_.header        , (0., 0., 0., 0.))
-                                        imgui.push_style_color(imgui.Col_.header_hovered, (0., 0., 0., 0.))
-                                    selectable_clicked, selectable_out = imgui.selectable(f"##{iid}_hitbox", self.selected[iid], flags=imgui.SelectableFlags_.span_all_columns|imgui.SelectableFlags_.allow_overlap|imgui.internal.SelectableFlagsPrivate_.select_on_click, size=(0,frame_height+cell_padding_y))
+                                        imgui.push_style_color(imgui.Col_.header_active, (0.0, 0.0, 0.0, 0.0))
+                                        imgui.push_style_color(imgui.Col_.header, (0.0, 0.0, 0.0, 0.0))
+                                        imgui.push_style_color(imgui.Col_.header_hovered, (0.0, 0.0, 0.0, 0.0))
+                                    selectable_clicked, selectable_out = imgui.selectable(
+                                        f"##{iid}_hitbox",
+                                        self.selected[iid],
+                                        flags=imgui.SelectableFlags_.span_all_columns
+                                        | imgui.SelectableFlags_.allow_overlap
+                                        | imgui.internal.SelectableFlagsPrivate_.select_on_click,
+                                        size=(0, frame_height + cell_padding_y),
+                                    )
                                     # instead override table row background color
                                     if override_color:
                                         if selectable_out:
-                                            imgui.table_set_bg_color(imgui.TableBgTarget_.row_bg0, imgui.color_convert_float4_to_u32(style_selected_row))
+                                            imgui.table_set_bg_color(
+                                                imgui.TableBgTarget_.row_bg0,
+                                                imgui.color_convert_float4_to_u32(style_selected_row),
+                                            )
                                         elif imgui.is_item_hovered():
-                                            imgui.table_set_bg_color(imgui.TableBgTarget_.row_bg0, imgui.color_convert_float4_to_u32(style_hovered_row))
+                                            imgui.table_set_bg_color(
+                                                imgui.TableBgTarget_.row_bg0,
+                                                imgui.color_convert_float4_to_u32(style_hovered_row),
+                                            )
                                         imgui.pop_style_color(3)
                                     imgui.pop_style_var(3)
-                                    imgui.set_cursor_pos_y(cur_pos_y)   # instead of imgui.same_line(), we just need this part of its effect
-                                    selectable_right_clicked, _ = gui_utils.handle_item_hitbox_events(iid, self.selected, context_menu=lambda _: self._item_context_menu([iid for iid in self.sorted_items if self.selected[iid]]) if has_context_menu else None)
+                                    imgui.set_cursor_pos_y(
+                                        cur_pos_y
+                                    )  # instead of imgui.same_line(), we just need this part of its effect
+                                    selectable_right_clicked, _ = gui_utils.handle_item_hitbox_events(
+                                        iid,
+                                        self.selected,
+                                        context_menu=lambda _: (
+                                            self._item_context_menu([
+                                                iid for iid in self.sorted_items if self.selected[iid]
+                                            ])
+                                            if has_context_menu
+                                            else None
+                                        ),
+                                    )
                                     has_drawn_hitbox = True
 
-                                if ci==int(self.allow_multiple):
+                                if ci == int(self.allow_multiple):
                                     # (Invisible) button because it aligns the following draw calls to center vertically
-                                    imgui.push_style_var(imgui.StyleVar_.frame_border_size, 0.)
-                                    imgui.push_style_var(imgui.StyleVar_.frame_padding    , (0.,imgui.get_style().frame_padding.y))
-                                    imgui.push_style_var(imgui.StyleVar_.item_spacing     , (0.,imgui.get_style().item_spacing.y))
-                                    imgui.push_style_color(imgui.Col_.button, (0.,0.,0.,0.))
-                                    imgui.button(f"##{iid}_id", size=(imgui.FLT_MIN,0))
+                                    imgui.push_style_var(imgui.StyleVar_.frame_border_size, 0.0)
+                                    imgui.push_style_var(
+                                        imgui.StyleVar_.frame_padding, (0.0, imgui.get_style().frame_padding.y)
+                                    )
+                                    imgui.push_style_var(
+                                        imgui.StyleVar_.item_spacing, (0.0, imgui.get_style().item_spacing.y)
+                                    )
+                                    imgui.push_style_color(imgui.Col_.button, (0.0, 0.0, 0.0, 0.0))
+                                    imgui.button(f"##{iid}_id", size=(imgui.FLT_MIN, 0))
                                     imgui.pop_style_color()
                                     imgui.pop_style_var(3)
 
                                     imgui.same_line()
 
-                                match ci+int(not self.allow_multiple):
+                                match ci + int(not self.allow_multiple):
                                     case 0:
                                         # Selector
                                         if disable_item:
                                             checkbox_clicked, checkbox_out, checkbox_hovered = False, False, False
                                         else:
-                                            checkbox_clicked, checkbox_out = gui_utils.my_checkbox(f"##{iid}_selected", self.selected[iid], frame_size=(0,0), frame_padding_override=(imgui.get_style().frame_padding.x/2,imgui.get_style().frame_padding.y))
+                                            checkbox_clicked, checkbox_out = gui_utils.my_checkbox(
+                                                f"##{iid}_selected",
+                                                self.selected[iid],
+                                                frame_size=(0, 0),
+                                                frame_padding_override=(
+                                                    imgui.get_style().frame_padding.x / 2,
+                                                    imgui.get_style().frame_padding.y,
+                                                ),
+                                            )
                                             checkbox_hovered = imgui.is_item_hovered()
                                     case 1:
                                         # Name
-                                        imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() - imgui.calc_text_size(DIR_ICON).x/3)
+                                        imgui.set_cursor_pos_x(
+                                            imgui.get_cursor_pos_x() - imgui.calc_text_size(DIR_ICON).x / 3
+                                        )
                                         imgui.text(self.items[iid].display_name)
                                     case 2:
                                         # Date created
@@ -864,10 +1013,10 @@ class FilePicker:
                                     case 4:
                                         # Type
                                         if self.items[iid].mime_type:
-                                            disp_str = utils.trim_str(self.items[iid].mime_type,20)
+                                            disp_str = utils.trim_str(self.items[iid].mime_type, 20)
                                             imgui.text(disp_str)
-                                            if disp_str!=self.items[iid].mime_type:
-                                                gui_utils.draw_hover_text(self.items[iid].mime_type, text='')
+                                            if disp_str != self.items[iid].mime_type:
+                                                gui_utils.draw_hover_text(self.items[iid].mime_type, text="")
                                     case 5:
                                         # Size
                                         if self.items[iid].size_str:
@@ -881,33 +1030,53 @@ class FilePicker:
                             # handle selection logic
                             # NB: the part of this logic that has to do with right-clicks is in handle_item_hitbox_events()
                             # NB: any_selectable_clicked is just for handling clicks not on any item
-                            any_selectable_clicked = any_selectable_clicked or selectable_clicked or selectable_right_clicked
+                            any_selectable_clicked = (
+                                any_selectable_clicked or selectable_clicked or selectable_right_clicked
+                            )
                             self.last_clicked_id = gui_utils.selectable_item_logic(
-                                iid, self.selected, self.last_clicked_id, self.sorted_items,
-                                selectable_clicked, selectable_out, allow_multiple=self.allow_multiple,
-                                overlayed_hovered=checkbox_hovered, overlayed_clicked=checkbox_clicked, new_overlayed_state=checkbox_out
-                                )
+                                iid,
+                                self.selected,
+                                self.last_clicked_id,
+                                self.sorted_items,
+                                selectable_clicked,
+                                selectable_out,
+                                allow_multiple=self.allow_multiple,
+                                overlayed_hovered=checkbox_hovered,
+                                overlayed_clicked=checkbox_clicked,
+                                new_overlayed_state=checkbox_out,
+                            )
 
                             # further deal with doubleclick on item
-                            if selectable_clicked and not checkbox_hovered: # don't enter this branch if interaction is with checkbox on the table row
-                                if not imgui.get_io().key_ctrl and not imgui.get_io().key_shift and imgui.is_mouse_double_clicked(imgui.MouseButton_.left):
+                            if (
+                                selectable_clicked and not checkbox_hovered
+                            ):  # don't enter this branch if interaction is with checkbox on the table row
+                                if (
+                                    not imgui.get_io().key_ctrl
+                                    and not imgui.get_io().key_shift
+                                    and imgui.is_mouse_double_clicked(imgui.MouseButton_.left)
+                                ):
                                     if self.items[iid].is_dir:
                                         new_loc = self.items[iid].full_path
                                         break
-                                    else:
-                                        utils.set_all(self.selected, False)
-                                        self.selected[iid] = True
-                                        imgui.close_current_popup()
-                                        closed = True
+                                    utils.set_all(self.selected, False)
+                                    self.selected[iid] = True
+                                    imgui.close_current_popup()
+                                    closed = True
 
                     # handle action keys
-                    if not self.popup_stack and not self.disable_keyboard_navigation and not imgui.get_io().want_text_input:
+                    if (
+                        not self.popup_stack
+                        and not self.disable_keyboard_navigation
+                        and not imgui.get_io().want_text_input
+                    ):
                         # no keyboard navigation in this GUI if a popup is open or key input taken elsewhere
                         selected_ids = [iid for iid in self.sorted_items if self.selected[iid]]
-                        if len(selected_ids)==1:
+                        if len(selected_ids) == 1:
                             if imgui.is_key_pressed(imgui.Key.f2, repeat=False):
                                 self.dialog_provider.show_rename_path_dialog(self.items[selected_ids[0]].full_path)
-                            if self.items[selected_ids[0]].is_dir and imgui.is_key_pressed(imgui.Key.enter, repeat=False):
+                            if self.items[selected_ids[0]].is_dir and imgui.is_key_pressed(
+                                imgui.Key.enter, repeat=False
+                            ):
                                 new_loc = self.items[selected_ids[0]].full_path
 
                 if new_loc:
@@ -920,14 +1089,16 @@ class FilePicker:
                 # deselect all, and if right click, show popup
                 # check mouse is below bottom of last drawn row so that clicking on the one pixel empty space between selectables
                 # does not cause everything to unselect or popup to open
-                if not any_selectable_clicked and imgui.get_io().mouse_pos.y>last_y:
-                    if imgui.is_item_clicked(imgui.MouseButton_.left):  # left mouse click (NB: table header is not signalled by is_item_clicked(), so this works correctly)
+                if not any_selectable_clicked and imgui.get_io().mouse_pos.y > last_y:
+                    if imgui.is_item_clicked(
+                        imgui.MouseButton_.left
+                    ):  # left mouse click (NB: table header is not signalled by is_item_clicked(), so this works correctly)
                         utils.set_all(self.selected, False)
                     # show menu when right-clicking the empty space
-                    if imgui.is_item_clicked(imgui.MouseButton_.right): # NB: mouse down
+                    if imgui.is_item_clicked(imgui.MouseButton_.right):  # NB: mouse down
                         utils.set_all(self.selected, False)  # deselect on right mouse click as well
-                    if has_context_menu and imgui.begin_popup_context_item("##file_list_context"):   # NB: mouse up
-                        if imgui.selectable(f"New folder##button", False)[0]:
+                    if has_context_menu and imgui.begin_popup_context_item("##file_list_context"):  # NB: mouse up
+                        if imgui.selectable("New folder##button", False)[0]:
                             self.dialog_provider.show_new_folder_dialog(self.loc)
                         imgui.end_popup()
 
@@ -935,19 +1106,19 @@ class FilePicker:
         return closed
 
     def _item_context_menu(self, iids: list[int]):
-        disabled = len(iids)!=1
+        disabled = len(iids) != 1
         if disabled:
             imgui.begin_disabled()
-        if imgui.selectable(f"Rename##button", False)[0]:
+        if imgui.selectable("Rename##button", False)[0]:
             self.dialog_provider.show_rename_path_dialog(self.items[iids[0]].full_path)
         if disabled:
             imgui.end_disabled()
-        if imgui.selectable(f"New folder here##button", False)[0]:
+        if imgui.selectable("New folder here##button", False)[0]:
             self.dialog_provider.show_new_folder_dialog(self.items[iids[0]].full_path.parent)
 
     def tick(self):
         # Auto refresh
-        if not self.refreshing and (self.elapsed>2 or imgui.is_key_pressed(imgui.Key.f5)):
+        if not self.refreshing and (self.elapsed > 2 or imgui.is_key_pressed(imgui.Key.f5)):
             self.refresh()
 
         # Setup popup
@@ -955,14 +1126,14 @@ class FilePicker:
             imgui.open_popup(self.title)
         opened = 1
         size = imgui.get_io().display_size
-        size.x *= .7
-        size.y *= .7
+        size.x *= 0.7
+        size.y *= 0.7
         imgui.set_next_window_size(size, cond=imgui.Cond_.appearing)
         if imgui.begin_popup_modal(self.title, True, flags=self.default_flags)[0]:
             cancelled = closed = gui_utils.close_weak_popup(check_click_outside=False)
             cancelled2, closed2 = self.draw()
             cancelled = cancelled or cancelled2
-            closed    = closed    or closed2
+            closed = closed or closed2
         else:
             opened = 0
             cancelled = closed = True
@@ -972,8 +1143,8 @@ class FilePicker:
                     selected = [self.loc]
                 else:
                     with self.items_lock:
-                        selected = [self.items[iid].full_path for iid in self.items if iid in self.selected and self.selected[iid]]
-                self.callback(selected if selected else None)
+                        selected = [self.items[iid].full_path for iid in self.items if self.selected.get(iid)]
+                self.callback(selected or None)
 
         gui_utils.handle_popup_stack(self.popup_stack)
         return opened, closed
@@ -983,20 +1154,20 @@ class FilePicker:
             ids = list(self.items)
             sort_specs = [sort_specs_in.get_specs(i) for i in range(sort_specs_in.specs_count)]
             for sort_spec in reversed(sort_specs):
-                match sort_spec.column_index+int(not self.allow_multiple):
-                    case 2:     # Date created
+                match sort_spec.column_index + int(not self.allow_multiple):
+                    case 2:  # Date created
                         key = lambda iid: self.items[iid].ctime
-                    case 3:     # Date modified
+                    case 3:  # Date modified
                         key = lambda iid: self.items[iid].mtime
-                    case 4:     # Type
-                        key = lambda iid: m if (m:=self.items[iid].mime_type) else ''
-                    case 5:     # Size
+                    case 4:  # Type
+                        key = lambda iid: m if (m := self.items[iid].mime_type) else ""
+                    case 5:  # Size
                         key = lambda iid: self.items[iid].size
 
-                    case _:     # Name and all others
+                    case _:  # Name and all others
                         key = natsort.os_sort_keygen(key=lambda iid: self.items[iid].full_path)
 
-                ids.sort(key=key, reverse=sort_spec.get_sort_direction()==imgui.SortDirection.descending)
+                ids.sort(key=key, reverse=sort_spec.get_sort_direction() == imgui.SortDirection.descending)
 
             # finally, always sort dirs first
             ids.sort(key=lambda iid: self.items[iid].is_dir, reverse=True)
@@ -1005,30 +1176,50 @@ class FilePicker:
             # apply filter, if any
             if self.filter_box_text:
                 search = self.filter_box_text.casefold()
+
                 def key(iid):
                     item = self.items[iid]
                     return search in item.display_name.casefold()
+
                 self.sorted_items = list(filter(key, self.sorted_items))
 
             # we're done
             sort_specs_in.specs_dirty = False
             self.require_sort = False
 
+
 class DirPicker(FilePicker):
-    def __init__(self, title="Directory picker", start_dir: str | pathlib.Path | None = None, callback: typing.Callable = None, allow_multiple = True, custom_popup_flags=0):
-        super().__init__(title=title, dir_picker=True, start_dir=start_dir, callback=callback, allow_multiple=allow_multiple, custom_popup_flags=custom_popup_flags)
+    def __init__(
+        self,
+        title="Directory picker",
+        start_dir: str | pathlib.Path | None = None,
+        callback: typing.Callable = None,
+        allow_multiple=True,
+        custom_popup_flags=0,
+    ):
+        super().__init__(
+            title=title,
+            dir_picker=True,
+            start_dir=start_dir,
+            callback=callback,
+            allow_multiple=allow_multiple,
+            custom_popup_flags=custom_popup_flags,
+        )
+
 
 class DialogProvider:
     def __init__(self, gui, action_provider):
         self.gui = gui
         self.action_provider = action_provider
+
     def show_new_folder_dialog(self, parent=pathlib.Path):
-        new_folder_name = 'New folder'
-        width = imgui.calc_text_size('x').x*35
+        new_folder_name = "New folder"
+        width = imgui.calc_text_size("x").x * 35
         setup_done = False
+
         def _new_folder_popup():
             nonlocal new_folder_name, setup_done
-            if imgui.begin_table("##new_folder",2):
+            if imgui.begin_table("##new_folder", 2):
                 imgui.table_setup_column("##new_folder_left", imgui.TableColumnFlags_.width_fixed)
                 imgui.table_setup_column("##new_folder_right", imgui.TableColumnFlags_.width_stretch)
                 imgui.table_next_row()
@@ -1040,21 +1231,28 @@ class DialogProvider:
                 if not setup_done:
                     imgui.set_keyboard_focus_here()
                     setup_done = True
-                _,new_folder_name = imgui.input_text("##new_folder_name", new_folder_name)
+                _, new_folder_name = imgui.input_text("##new_folder_name", new_folder_name)
                 imgui.end_table()
+
         buttons = {
-            ifa6.ICON_FA_CHECK+" Make folder": lambda: self.action_provider('make_dir',parent/new_folder_name),
-            ifa6.ICON_FA_CIRCLE_XMARK+" Cancel": None
+            ifa6.ICON_FA_CHECK + " Make folder": lambda: self.action_provider("make_dir", parent / new_folder_name),
+            ifa6.ICON_FA_CIRCLE_XMARK + " Cancel": None,
         }
-        gui_utils.push_popup(self.gui, lambda: gui_utils.popup("Make folder", _new_folder_popup, buttons=buttons, button_keymap={0:imgui.Key.enter}, closable=True))
+        gui_utils.push_popup(
+            self.gui,
+            lambda: gui_utils.popup(
+                "Make folder", _new_folder_popup, buttons=buttons, button_keymap={0: imgui.Key.enter}, closable=True
+            ),
+        )
 
     def show_rename_path_dialog(self, item: pathlib.Path):
         item_name = item.name
-        width = imgui.calc_text_size('x').x*(len(item_name)+15)
+        width = imgui.calc_text_size("x").x * (len(item_name) + 15)
         setup_done = False
+
         def _rename_item_popup():
             nonlocal item_name, setup_done
-            if imgui.begin_table("##rename_item",2):
+            if imgui.begin_table("##rename_item", 2):
                 imgui.table_setup_column("##rename_item_left", imgui.TableColumnFlags_.width_fixed)
                 imgui.table_setup_column("##rename_item_right", imgui.TableColumnFlags_.width_stretch)
                 imgui.table_next_row()
@@ -1066,10 +1264,16 @@ class DialogProvider:
                 if not setup_done:
                     imgui.set_keyboard_focus_here()
                     setup_done = True
-                _,item_name = imgui.input_text("##new_rename_item", item_name)
+                _, item_name = imgui.input_text("##new_rename_item", item_name)
                 imgui.end_table()
+
         buttons = {
-            ifa6.ICON_FA_CHECK+" Rename": lambda: self.action_provider('rename_path', item, item.parent / item_name),
-            ifa6.ICON_FA_CIRCLE_XMARK+" Cancel": None
+            ifa6.ICON_FA_CHECK + " Rename": lambda: self.action_provider("rename_path", item, item.parent / item_name),
+            ifa6.ICON_FA_CIRCLE_XMARK + " Cancel": None,
         }
-        gui_utils.push_popup(self.gui, lambda: gui_utils.popup("Rename item", _rename_item_popup, buttons=buttons, button_keymap={0:imgui.Key.enter}, closable=True))
+        gui_utils.push_popup(
+            self.gui,
+            lambda: gui_utils.popup(
+                "Rename item", _rename_item_popup, buttons=buttons, button_keymap={0: imgui.Key.enter}, closable=True
+            ),
+        )

@@ -1,74 +1,91 @@
-from enum import Enum, auto
 import dataclasses
+from enum import Enum, auto
 
 from . import json, utils
 
+
 class Type(Enum):
-    Point       = auto()
-    Interval    = auto()
+    Point = auto()
+    Interval = auto()
+
 
 class EventType(utils.AutoName):
-    Validate    = auto()    # interval to be used for running glassesValidator
-    Sync_Camera = auto()    # point to be used for synchronizing different cameras
-    Sync_ET_Data= auto()    # episode to be used for synchronization of eye tracker data to scene camera (e.g. using VOR)
-    Trial       = auto()    # episode for which to map gaze to plane(s): output for files to be provided to user
-    Target      = auto()    # episode indicating when a specific target is being looked at
-    Fixation    = auto()    # episode indicating a fixation (e.g. detected by I2MC)
+    Validate = auto()  # interval to be used for running glassesValidator
+    Sync_Camera = auto()  # point to be used for synchronizing different cameras
+    Sync_ET_Data = (
+        auto()
+    )  # episode to be used for synchronization of eye tracker data to scene camera (e.g. using VOR)
+    Trial = auto()  # episode for which to map gaze to plane(s): output for files to be provided to user
+    Target = auto()  # episode indicating when a specific target is being looked at
+    Fixation = auto()  # episode indicating a fixation (e.g. detected by I2MC)
+
+
 event_types = [x for x in EventType]
-json.register_type(json.TypeEntry(EventType,'__enum.Event__', utils.enum_val_2_str, lambda x: getattr(EventType, x.split('.')[1])))
+json.register_type(
+    json.TypeEntry(EventType, "__enum.Event__", utils.enum_val_2_str, lambda x: getattr(EventType, x.split(".")[1]))
+)
 
 type_map = {
-    EventType.Validate      : Type.Interval,
-    EventType.Sync_Camera   : Type.Point,
-    EventType.Sync_ET_Data  : Type.Interval,
-    EventType.Trial         : Type.Interval,
-    EventType.Target        : Type.Interval,
-    EventType.Fixation      : Type.Interval,
+    EventType.Validate: Type.Interval,
+    EventType.Sync_Camera: Type.Point,
+    EventType.Sync_ET_Data: Type.Interval,
+    EventType.Trial: Type.Interval,
+    EventType.Target: Type.Interval,
+    EventType.Fixation: Type.Interval,
 }
 
 internal_types = {EventType.Target, EventType.Fixation}
 
 tooltip_map = {
-    EventType.Validate      : 'Validation episode',
-    EventType.Sync_Camera   : 'Camera sync point',
-    EventType.Sync_ET_Data  : 'Eye tracker synchronization episode',
-    EventType.Trial         : 'Trial episode',
-    EventType.Target        : 'Target episode',
-    EventType.Fixation      : 'Fixation episode',
+    EventType.Validate: "Validation episode",
+    EventType.Sync_Camera: "Camera sync point",
+    EventType.Sync_ET_Data: "Eye tracker synchronization episode",
+    EventType.Trial: "Trial episode",
+    EventType.Target: "Target episode",
+    EventType.Fixation: "Fixation episode",
 }
 
 default_hotkeys = {
-    EventType.Validate      : 'v',
-    EventType.Sync_Camera   : 'c',
-    EventType.Sync_ET_Data  : 'e',
-    EventType.Trial         : 't',
+    EventType.Validate: "v",
+    EventType.Sync_Camera: "c",
+    EventType.Sync_ET_Data: "e",
+    EventType.Trial: "t",
 }
+
 
 @dataclasses.dataclass
 class Event:
-    event_type  : EventType
-    name        : str
-    description : str = ''
-    hotkey      : str = ''
+    event_type: EventType
+    name: str
+    description: str = ""
+    hotkey: str = ""
+
 
 EVENT_REGISTRY = []
+
+
 def register_event(entry: Event):
     EVENT_REGISTRY.append(entry)
 
+
 def unregister_all_annotation_types():
     EVENT_REGISTRY.clear()
+
 
 def get_events_by_type(event_type: EventType) -> list[Event]:
     return [e for e in EVENT_REGISTRY if e.event_type == event_type]
 
 
-def flatten_annotation_dict(annotations: dict[str, tuple[EventType, list[list[int]]]]) -> dict[str, tuple[EventType, list[int]]]:
+def flatten_annotation_dict(
+    annotations: dict[str, tuple[EventType, list[list[int]]]],
+) -> dict[str, tuple[EventType, list[int]]]:
     annotations_flat: dict[str, tuple[EventType, list[int]]] = {}
+
     def _copy_flat_annotation(annotations: tuple[EventType, list[list[int]]]):
-        if annotations[1] and isinstance(annotations[1][0],list):
+        if annotations[1] and isinstance(annotations[1][0], list):
             return (annotations[0], [i for iv in annotations[1] for i in iv])
-        else:
-            return (annotations[0], annotations[1].copy())
+        return (annotations[0], annotations[1].copy())
+
     for e in EVENT_REGISTRY:  # iterate over this for consistent ordering
         if e.name not in annotations:
             continue
@@ -79,16 +96,20 @@ def flatten_annotation_dict(annotations: dict[str, tuple[EventType, list[list[in
             annotations_flat[e_name] = _copy_flat_annotation(annotations[e_name])
     return annotations_flat
 
-def unflatten_annotation_dict(annotations: dict[str, tuple[EventType, list[int]]], add_incomplete_intervals:bool = False) -> dict[str, tuple[EventType, list[list[int]]]]:
+
+def unflatten_annotation_dict(
+    annotations: dict[str, tuple[EventType, list[int]]], add_incomplete_intervals: bool = False
+) -> dict[str, tuple[EventType, list[list[int]]]]:
     annotations_unflat: dict[str, tuple[EventType, list[list[int]]]] = {}
+
     def _copy_unflat_annotation(annotations: tuple[EventType, list[int]]):
-        if type_map[annotations[0]]==Type.Interval:
-            l = (annotations[0], [annotations[1][m:m+2] for m in range(0,len(annotations[1])-1,2)])
-            if add_incomplete_intervals and len(annotations[1])%2==1:
+        if type_map[annotations[0]] == Type.Interval:
+            l = (annotations[0], [annotations[1][m : m + 2] for m in range(0, len(annotations[1]) - 1, 2)])
+            if add_incomplete_intervals and len(annotations[1]) % 2 == 1:
                 l[1].append([annotations[1][-1]])
             return l
-        else:
-            return (annotations[0], [[tp] for tp in annotations[1]])
+        return (annotations[0], [[tp] for tp in annotations[1]])
+
     for e in EVENT_REGISTRY:  # iterate over this for consistent ordering
         if e.name not in annotations:
             continue

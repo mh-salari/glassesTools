@@ -1,11 +1,12 @@
-import enum
-import multiprocessing.managers
-import pebble
-import multiprocessing
-import typing
-import threading
 import dataclasses
+import enum
+import multiprocessing
+import multiprocessing.managers
+import threading
 import time
+import typing
+
+import pebble
 
 from . import json, utils
 
@@ -14,36 +15,50 @@ _UserDataT = typing.TypeVar("_UserDataT")
 
 
 class CounterContext:
-    _count = -1     # so that first number is 0
+    _count = -1  # so that first number is 0
+
     def __enter__(self):
         self._count += 1
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         pass
+
     def get_count(self):
         return self._count
 
 
 class State(enum.IntEnum):
     # states for signalling task status, to be stored in files
-    Not_Run     = enum.auto()
-    Pending     = enum.auto()
-    Running     = enum.auto()
-    Completed   = enum.auto()
+    Not_Run = enum.auto()
+    Pending = enum.auto()
+    Running = enum.auto()
+    Completed = enum.auto()
     # two more states needed by process_pool/GUI
-    Canceled    = enum.auto()
-    Failed      = enum.auto()
+    Canceled = enum.auto()
+    Failed = enum.auto()
+
     @property
     def displayable_name(self):
         return self.name.replace("_", " ")
-json.register_type(json.TypeEntry(State,'__enum.process.State__', utils.enum_val_2_str, lambda x: getattr(State, x.split('.')[1])))
 
 
-class ProcessWaiter(object):
+json.register_type(
+    json.TypeEntry(State, "__enum.process.State__", utils.enum_val_2_str, lambda x: getattr(State, x.split(".")[1]))
+)
+
+
+class ProcessWaiter:
     """Routes completion through to user callback."""
-    def __init__(self, job_id: int, user_data: _UserDataT, done_callback: typing.Callable[[ProcessFuture, _UserDataT, int, State], None]):
-        self.done_callback  = done_callback
-        self.job_id         = job_id
-        self.user_data      = user_data
+
+    def __init__(
+        self,
+        job_id: int,
+        user_data: _UserDataT,
+        done_callback: typing.Callable[[ProcessFuture, _UserDataT, int, State], None],
+    ):
+        self.done_callback = done_callback
+        self.job_id = job_id
+        self.user_data = user_data
 
     def add_result(self, future: ProcessFuture):
         self._notify(future, State.Completed)
@@ -57,19 +72,22 @@ class ProcessWaiter(object):
     def _notify(self, future: ProcessFuture, state: State):
         self.done_callback(future, self.job_id, self.user_data, state)
 
+
 class PoolJob(typing.NamedTuple):
-    future   : ProcessFuture
+    future: ProcessFuture
     user_data: _UserDataT
+
+
 class ProcessPool:
-    def __init__(self, num_workers = 2):
-        self.num_workers            = num_workers
-        self.auto_cleanup_if_no_work= False
+    def __init__(self, num_workers=2):
+        self.num_workers = num_workers
+        self.auto_cleanup_if_no_work = False
 
         # NB: pool is only started in run() once needed
-        self._pool              : pebble.pool.ProcessPool   = None
-        self._jobs              : dict[int,PoolJob]         = None
-        self._job_id_provider   : CounterContext            = CounterContext()
-        self._lock              : threading.Lock            = threading.Lock()
+        self._pool: pebble.pool.ProcessPool = None
+        self._jobs: dict[int, PoolJob] = None
+        self._job_id_provider: CounterContext = CounterContext()
+        self._lock: threading.Lock = threading.Lock()
 
     def _cleanup(self):
         # cancel all pending and running jobs
@@ -99,10 +117,19 @@ class ProcessPool:
         # NB: doesn't change number of workers on an active pool, only takes effect when pool is restarted
         self.num_workers = num_workers
 
-    def run(self, fn: typing.Callable, user_data: _UserDataT=None, done_callback: typing.Callable[[ProcessFuture, _UserDataT, int, State], None]=None, *args, **kwargs) -> tuple[int, ProcessFuture]:
+    def run(
+        self,
+        fn: typing.Callable,
+        user_data: _UserDataT = None,
+        done_callback: typing.Callable[[ProcessFuture, _UserDataT, int, State], None] = None,
+        *args,
+        **kwargs,
+    ) -> tuple[int, ProcessFuture]:
         with self._lock:
             if self._pool is None or not self._pool.active:
-                context = multiprocessing.get_context("spawn")  # ensure consistent behavior on Windows (where this is default) and Unix (where fork is default, but that may bring complications)
+                context = multiprocessing.get_context(
+                    "spawn"
+                )  # ensure consistent behavior on Windows (where this is default) and Unix (where fork is default, but that may bring complications)
                 self._pool = pebble.ProcessPool(max_workers=self.num_workers, context=context)
 
             if self._jobs is None:
@@ -133,8 +160,7 @@ class ProcessPool:
         job = self._jobs.get(job_id, None)
         if job is None:
             return None
-        else:
-            return _get_status_from_future(job.future)
+        return _get_status_from_future(job.future)
 
     def get_job_user_data(self, job_id: int) -> _UserDataT:
         if not self._jobs:
@@ -142,8 +168,7 @@ class ProcessPool:
         job = self._jobs.get(job_id, None)
         if job is None:
             return None
-        else:
-            return job.user_data
+        return job.user_data
 
     def cancel_job(self, job_id: int) -> bool:
         if not self._jobs:
@@ -155,19 +180,21 @@ class ProcessPool:
     def cancel_all_jobs(self):
         if not self._jobs:
             return
-        for job_id in reversed(self._jobs): # reversed so that later pending jobs don't start executing when earlier gets cancelled, only to be canceled directly after
+        for job_id in reversed(
+            self._jobs
+        ):  # reversed so that later pending jobs don't start executing when earlier gets cancelled, only to be canceled directly after
             if not self._jobs[job_id].future.done():
                 self._jobs[job_id].future.cancel()
 
 
 class JobPayload(typing.NamedTuple):
-    fn:     typing.Callable[..., None]
-    args:   tuple
+    fn: typing.Callable[..., None]
+    args: tuple
     kwargs: dict
 
-class _EMA(object):
-    """
-    Exponential moving average: smoothing to give progressively lower
+
+class _EMA:
+    """Exponential moving average: smoothing to give progressively lower
     weights to older values.
     N.B.: copied from tqdm
 
@@ -175,6 +202,7 @@ class _EMA(object):
         Smoothing factor in range [0, 1], [default: 0.3].
         Ranges from 0 (yields old value) to 1 (yields new value).
     """
+
     def __init__(self, smoothing=0.3):
         self.alpha = smoothing
         self.last = 0
@@ -185,73 +213,91 @@ class _EMA(object):
         if x is not None:
             self.last = self.alpha * x + beta * self.last
             self.calls += 1
-        return self.last / (1 - beta ** self.calls) if self.calls else self.last
+        return self.last / (1 - beta**self.calls) if self.calls else self.last
+
 
 def _format_interval(t):
     mins, s = divmod(int(t), 60)
     h, m = divmod(mins, 60)
-    return f'{h:d}:{m:02d}:{s:02d}' if h else f'{m:02d}:{s:02d}'
+    return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
 
 class JobProgress:
     # based on tqdm, much reduced functionality
-    def __init__(self, initial: int=0, total: int=999999, unit: str="it", update_interval: int=1, smoothing: float=.3, printer: typing.Callable[[str], None]=None, print_interval: int = 100):
-        self.n              = initial
-        self.total          = total
-        self.unit           = unit
-        self.update_interval= update_interval
-        self.smoothing      = 0.3
+    def __init__(
+        self,
+        initial: int = 0,
+        total: int = 999999,
+        unit: str = "it",
+        update_interval: int = 1,
+        smoothing: float = 0.3,
+        printer: typing.Callable[[str], None] = None,
+        print_interval: int = 100,
+    ):
+        self.n = initial
+        self.total = total
+        self.unit = unit
+        self.update_interval = update_interval
+        self.smoothing = 0.3
 
-        self._printer       = printer
+        self._printer = printer
         self.print_interval = print_interval
 
-        self._ema_dn        = _EMA(smoothing)
-        self._ema_dt        = _EMA(smoothing)
-        self._time          = time.time
+        self._ema_dn = _EMA(smoothing)
+        self._ema_dt = _EMA(smoothing)
+        self._time = time.time
 
-        self.percentage     = 0.
-        self.progress_str   = ''
+        self.percentage = 0.0
+        self.progress_str = ""
 
-        self.last_update_n  = initial
-        self.last_update_t  = self._time()
-        self.start_t        = self.last_update_t
+        self.last_update_n = initial
+        self.last_update_t = self._time()
+        self.start_t = self.last_update_t
 
     def set_total(self, total: int):
         self.total = total
+
     def set_unit(self, unit: str):
         self.unit = unit
+
     def set_intervals(self, update_interval: int, print_interval: int):
-        self.update_interval= max(1,update_interval)
-        self.print_interval = max(1,print_interval)
+        self.update_interval = max(1, update_interval)
+        self.print_interval = max(1, print_interval)
 
     def update(self, n=1):
         self.n += n
-        should_print = self._printer is not None and self.n%self.print_interval==0
-        if not self.progress_str or self.n-self.last_update_n>=self.update_interval or should_print or self.n==self.total:
+        should_print = self._printer is not None and self.n % self.print_interval == 0
+        if (
+            not self.progress_str
+            or self.n - self.last_update_n >= self.update_interval
+            or should_print
+            or self.n == self.total
+        ):
             cur_t = self._time()
             dt = cur_t - self.last_update_t
             dn = self.n - self.last_update_n
             if self.smoothing and dt and dn:
                 self._ema_dn(dn)
                 self._ema_dt(dt)
-                rate = self._ema_dn()/dts if (dts:=self._ema_dt()) else None
+                rate = self._ema_dn() / dts if (dts := self._ema_dt()) else None
             else:
-                rate = dn/dt if dt else None
+                rate = dn / dt if dt else None
 
             inv_rate = 1 / rate if rate else None
-            rate_fmt     = (f'{rate:5.2f}'     if     rate else '?') + ' ' + self.unit + '/s'
-            rate_inv_fmt = (f'{inv_rate:5.2f}' if inv_rate else '?') + ' s/' + self.unit
+            rate_fmt = (f"{rate:5.2f}" if rate else "?") + " " + self.unit + "/s"
+            rate_inv_fmt = (f"{inv_rate:5.2f}" if inv_rate else "?") + " s/" + self.unit
             rate_str = rate_inv_fmt if inv_rate and inv_rate > 1 else rate_fmt
 
             elapsed = cur_t - self.start_t
             elapsed_str = _format_interval(elapsed)
 
             remaining = (self.total - self.n) / rate if rate and self.total else 0
-            remaining_str = _format_interval(remaining) if rate else '?'
+            remaining_str = _format_interval(remaining) if rate else "?"
 
             self.percentage = (self.n / self.total) * 100
-            percentage_str = f'{self.percentage:3.0f}%'
+            percentage_str = f"{self.percentage:3.0f}%"
 
-            self.progress_str = f'{self.n}/{self.total} ({percentage_str}) [{elapsed_str}<{remaining_str}, {rate_str}]'
+            self.progress_str = f"{self.n}/{self.total} ({percentage_str}) [{elapsed_str}<{remaining_str}, {rate_str}]"
 
             self.last_update_n = self.n
             self.last_update_t = cur_t
@@ -262,33 +308,38 @@ class JobProgress:
         return (self.percentage, self.progress_str)
 
     def set_start_time_to_now(self):
-        self.last_update_t  = self._time()
-        self.start_t        = self.last_update_t
+        self.last_update_t = self._time()
+        self.start_t = self.last_update_t
 
     def set_finished(self):
-        self.update(self.total-self.n)
-multiprocessing.managers.BaseManager.register('JobProgress', JobProgress)
+        self.update(self.total - self.n)
+
+
+multiprocessing.managers.BaseManager.register("JobProgress", JobProgress)
+
 
 @dataclasses.dataclass
 class JobDescription(typing.Generic[_UserDataT]):
-    user_data:          _UserDataT
-    payload:            JobPayload
-    progress:           JobProgress
-    done_callback:      typing.Callable[[ProcessFuture, _UserDataT, int, State], None]
+    user_data: _UserDataT
+    payload: JobPayload
+    progress: JobProgress
+    done_callback: typing.Callable[[ProcessFuture, _UserDataT, int, State], None]
 
-    exclusive_id:       typing.Optional[int]      = None # if set, only one task with a given id can be run at a time, rest are kept in waiting. E.g. to ensure only one task needing a gui is run at a time
-    priority:           int                       = 999  # jobs with a higher priority are scheduled first, unless they cannot be because they're exclusive (exclusive_id is set) and task of that exclusivity is already running, or because their dependencies are not met yet
-    depends_on:         typing.Optional[set[int]] = None # set of job ids that need to be completed before this one can be launched
+    exclusive_id: int | None = (
+        None  # if set, only one task with a given id can be run at a time, rest are kept in waiting. E.g. to ensure only one task needing a gui is run at a time
+    )
+    priority: int = 999  # jobs with a higher priority are scheduled first, unless they cannot be because they're exclusive (exclusive_id is set) and task of that exclusivity is already running, or because their dependencies are not met yet
+    depends_on: set[int] | None = None  # set of job ids that need to be completed before this one can be launched
 
-    _pool_job_id:       typing.Optional[int]            = None
-    _future:            typing.Optional[ProcessFuture]  = dataclasses.field(init=False, default=None)
-    _final_state:       typing.Optional[State]          = dataclasses.field(init=False, default=None)
-    error:              typing.Optional[str]            = None
+    _pool_job_id: int | None = None
+    _future: ProcessFuture | None = dataclasses.field(init=False, default=None)
+    _final_state: State | None = dataclasses.field(init=False, default=None)
+    error: str | None = None
 
     def get_state(self) -> State:
         if self._final_state is not None:
             return self._final_state
-        elif self._future is not None:
+        if self._future is not None:
             job_state = _get_status_from_future(self._future)
             if job_state not in [State.Pending, State.Running]:
                 # finished, cache result
@@ -305,25 +356,34 @@ class JobDescription(typing.Generic[_UserDataT]):
     def is_finished(self):
         return self._final_state is not None
 
+
 class JobScheduler(typing.Generic[_UserDataT]):
-    def __init__(self, pool: ProcessPool, job_is_valid_checker : typing.Callable[[_UserDataT], bool]|None = None):
-        self.jobs               : dict[int, JobDescription[_UserDataT]] = {}
-        self._job_id_provider   : CounterContext                        = CounterContext()
-        self._pending_jobs      : list[int]                             = []    # jobs not scheduled or finished
+    def __init__(self, pool: ProcessPool, job_is_valid_checker: typing.Callable[[_UserDataT], bool] | None = None):
+        self.jobs: dict[int, JobDescription[_UserDataT]] = {}
+        self._job_id_provider: CounterContext = CounterContext()
+        self._pending_jobs: list[int] = []  # jobs not scheduled or finished
 
-        self._job_is_valid_checker  = job_is_valid_checker
-        self._pool                  = pool
+        self._job_is_valid_checker = job_is_valid_checker
+        self._pool = pool
 
-        self._manager               = multiprocessing.managers.BaseManager(ctx=multiprocessing.get_context("spawn"))
+        self._manager = multiprocessing.managers.BaseManager(ctx=multiprocessing.get_context("spawn"))
         self._manager.start()
 
-    def add_job(self,
-                user_data: _UserDataT, payload: JobPayload, done_callback: typing.Callable[[ProcessFuture, _UserDataT, int, State], None],
-                progress_indicator: JobProgress|None = None,
-                exclusive_id: typing.Optional[int] = None, priority: int|None = None, depends_on: typing.Optional[set[int]] = None) -> int:
+    def add_job(
+        self,
+        user_data: _UserDataT,
+        payload: JobPayload,
+        done_callback: typing.Callable[[ProcessFuture, _UserDataT, int, State], None],
+        progress_indicator: JobProgress | None = None,
+        exclusive_id: int | None = None,
+        priority: int | None = None,
+        depends_on: set[int] | None = None,
+    ) -> int:
         with self._job_id_provider:
             job_id = self._job_id_provider.get_count()
-        self.jobs[job_id] = JobDescription(user_data, payload, progress_indicator, done_callback, exclusive_id, priority, depends_on)
+        self.jobs[job_id] = JobDescription(
+            user_data, payload, progress_indicator, done_callback, exclusive_id, priority, depends_on
+        )
         self._pending_jobs.append(job_id)
         return job_id
 
@@ -374,7 +434,7 @@ class JobScheduler(typing.Generic[_UserDataT]):
                 if not self._job_is_valid_checker(job.user_data):
                     self.cancel_job(job_id)
             # remove finished job from pending jobs if its still there
-            job.get_state() # update state
+            job.get_state()  # update state
             if job.is_finished() and job_id in self._pending_jobs:
                 self._pending_jobs.remove(job_id)
             # check how many scheduled jobs we have
@@ -387,17 +447,30 @@ class JobScheduler(typing.Generic[_UserDataT]):
         while num_scheduled_to_pool < self._pool.num_workers:
             # find suitable next task to schedule
             # order tasks by priority, filtering out those who have a colliding exclusive_id
-            job_ids = [i for i in sorted(self._pending_jobs, key=lambda ii: 999 if self.jobs[ii].priority is None else self.jobs[ii].priority) if self.jobs[i].exclusive_id not in exclusive_ids]
+            job_ids = [
+                i
+                for i in sorted(
+                    self._pending_jobs,
+                    key=lambda ii: 999 if self.jobs[ii].priority is None else self.jobs[ii].priority,
+                )
+                if self.jobs[i].exclusive_id not in exclusive_ids
+            ]
             if not job_ids:
                 break
             job_id = job_ids[0]
             to_schedule = self.jobs[job_id]
             extra_kwargs = {}
             if to_schedule.progress is not None:
-                extra_kwargs['progress_indicator'] = to_schedule.progress
+                extra_kwargs["progress_indicator"] = to_schedule.progress
 
-            to_schedule._pool_job_id, to_schedule._future = \
-                self._pool.run(to_schedule.payload.fn, to_schedule.user_data, to_schedule.done_callback, *to_schedule.payload.args, **extra_kwargs, **to_schedule.payload.kwargs)
+            to_schedule._pool_job_id, to_schedule._future = self._pool.run(
+                to_schedule.payload.fn,
+                to_schedule.user_data,
+                to_schedule.done_callback,
+                *to_schedule.payload.args,
+                **extra_kwargs,
+                **to_schedule.payload.kwargs,
+            )
             self._pending_jobs.remove(job_id)
             if to_schedule.exclusive_id is not None:
                 exclusive_ids.add(to_schedule.exclusive_id)
@@ -407,12 +480,10 @@ class JobScheduler(typing.Generic[_UserDataT]):
 def _get_status_from_future(fut: ProcessFuture) -> State:
     if fut.running():
         return State.Running
-    elif fut.done():
+    if fut.done():
         if fut.cancelled():
             return State.Canceled
-        elif fut.exception() is not None:
+        if fut.exception() is not None:
             return State.Failed
-        else:
-            return State.Completed
-    else:
-        return State.Pending
+        return State.Completed
+    return State.Pending

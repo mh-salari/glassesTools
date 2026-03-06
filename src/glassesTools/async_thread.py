@@ -1,8 +1,8 @@
-import threading
 import asyncio
-import typing
-import time
 import concurrent
+import threading
+import time
+import typing
 
 loop: asyncio.AbstractEventLoop = None
 thread: threading.Thread = None
@@ -28,6 +28,7 @@ def setup(enable_asyncio_debug=False):
 
     thread = threading.Thread(target=run_loop, args=(loop,), daemon=True)
     thread.start()
+
 
 def cleanup():
     global loop, thread
@@ -60,9 +61,11 @@ def wait(coroutine: typing.Coroutine):
 # Example usage
 if __name__ == "__main__":
     import async_thread  # This script is designed as a module you import
+
     async_thread.setup()
 
     import random
+
     async def wait_and_say_hello(num):
         await asyncio.sleep(random.random())
         print(f"Hello {num}!")

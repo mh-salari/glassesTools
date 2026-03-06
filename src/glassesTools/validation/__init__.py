@@ -1,18 +1,26 @@
-
+import math
 import pathlib
 import typing
-import math
-import pandas as pd
 from collections import defaultdict
 
-from .. import aruco, marker as _marker, plane as _plane
+import pandas as pd
 
+from .. import aruco
+from .. import marker as _marker
+from .. import plane as _plane
 from . import config
-from . import default_poster
-from . import dynamic
+from . import default_poster as default_poster
+from . import dynamic as dynamic
+
 
 class Plane(_plane.TargetPlane):
-    def __init__(self, config_dir: str|pathlib.Path|None, validation_config: dict[str,typing.Any]=None, is_dynamic=False, **kwarg):
+    def __init__(
+        self,
+        config_dir: str | pathlib.Path | None,
+        validation_config: dict[str, typing.Any] = None,
+        is_dynamic=False,
+        **kwarg,
+    ):
         # NB: if config_dir is None, the default config will be used
 
         if config_dir is not None:
@@ -24,67 +32,84 @@ class Plane(_plane.TargetPlane):
         self.config = validation_config
 
         # get marker width
-        if self.config['mode'] == 'deg':
-            self.cell_size_mm = 2.*math.tan(math.radians(.5))*self.config['distance']*10
+        if self.config["mode"] == "deg":
+            self.cell_size_mm = 2.0 * math.tan(math.radians(0.5)) * self.config["distance"] * 10
         else:
-            self.cell_size_mm = 10 # 1cm
+            self.cell_size_mm = 10  # 1cm
 
         # get board size
-        plane_size = _plane.Coordinate(self.config['gridCols']*self.cell_size_mm, self.config['gridRows']*self.cell_size_mm)
+        plane_size = _plane.Coordinate(
+            self.config["gridCols"] * self.cell_size_mm, self.config["gridRows"] * self.cell_size_mm
+        )
 
         # get targets first, so that any dynamic markers can be split off and then the rest passed to base class
-        self.targets: dict[int,_marker.Marker]                  = {}
-        self.dynamic_markers: dict[int, tuple[int,int]]         = {}        # {marker ID: (target ID, marker_N column in target file)} (keep latter around for good error reporting)
-        self._dynamic_markers_cache: dict[int, _marker.MarkerID]= None      # different format, for efficient return from get_marker_IDs()
+        self.targets: dict[int, _marker.Marker] = {}
+        self.dynamic_markers: dict[
+            int, tuple[int, int]
+        ] = {}  # {marker ID: (target ID, marker_N column in target file)} (keep latter around for good error reporting)
+        self._dynamic_markers_cache: dict[int, _marker.MarkerID] = (
+            None  # different format, for efficient return from get_marker_IDs()
+        )
         targets, origin = self._get_targets(config_dir, self.config, is_dynamic)
 
         # call base class
-        markers = config.get_markers(config_dir, self.config['markerPosFile'])
-        if 'ref_image_store_path' not in kwarg:
-            kwarg['ref_image_store_path'] = None
-        super(Plane, self).__init__(markers, targets, self.config['markerSide'], plane_size, self.config['arucoDictionary'], self.config['markerBorderBits'], self.cell_size_mm, "mm", ref_image_size=self.config['referencePosterSize'], min_num_markers=self.config['minNumMarkers'], **kwarg)
+        markers = config.get_markers(config_dir, self.config["markerPosFile"])
+        if "ref_image_store_path" not in kwarg:
+            kwarg["ref_image_store_path"] = None
+        super().__init__(
+            markers,
+            targets,
+            self.config["markerSide"],
+            plane_size,
+            self.config["arucoDictionary"],
+            self.config["markerBorderBits"],
+            self.cell_size_mm,
+            "mm",
+            ref_image_size=self.config["referencePosterSize"],
+            min_num_markers=self.config["minNumMarkers"],
+            **kwarg,
+        )
 
         # set center
         self.set_origin(origin)
 
     def _get_targets(self, config_dir, validationSetup, is_dynamic) -> tuple[pd.DataFrame, _plane.Coordinate]:
-        """ poster space: (0,0) is origin (might be center target), (-,-) bottom left """
-
+        """Poster space: (0,0) is origin (might be center target), (-,-) bottom left"""
         # read in target positions
-        targets = config.get_targets(config_dir, validationSetup['targetPosFile'])
+        targets = config.get_targets(config_dir, validationSetup["targetPosFile"])
         if targets is not None:
-            targets_center = targets[['x','y']] * self.cell_size_mm
+            targets_center = targets[["x", "y"]] * self.cell_size_mm
             if is_dynamic:
                 # split of columns indicating markers that signal appearance of a target
-                markers = pd.concat([targets.pop(c) for c in targets.columns if c.startswith('marker_')], axis=1)
-            origin = _plane.Coordinate(*targets_center.loc[validationSetup['centerTarget']].values)  # NB: need origin in scaled space
+                markers = pd.concat([targets.pop(c) for c in targets.columns if c.startswith("marker_")], axis=1)
+            origin = _plane.Coordinate(
+                *targets_center.loc[validationSetup["centerTarget"]].values
+            )  # NB: need origin in scaled space
             # load with dynamic markers, if any
             if is_dynamic:
-                marker_columns = {c:int(c.removeprefix('marker_')) for c in markers}
+                marker_columns = {c: int(c.removeprefix("marker_")) for c in markers}
+
                 def _store_markers(r: pd.Series):
                     for c in marker_columns:
                         self.dynamic_markers[int(r[c])] = (int(r.name), marker_columns[c])
+
                 markers.apply(_store_markers, axis=1)
         else:
             self.dynamic_markers.clear()
-            origin = _plane.Coordinate(0.,0.)
+            origin = _plane.Coordinate(0.0, 0.0)
         self._dynamic_markers_cache = None
         return targets, origin
 
-    def get_marker_IDs(self) -> dict[str|int,list[_marker.MarkerID]]:
+    def get_marker_IDs(self) -> dict[str | int, list[_marker.MarkerID]]:
         if self._dynamic_markers_cache is None:
             self._dynamic_markers_cache = defaultdict(list)
             # {marker ID: (target ID, marker_N column in target file)} -> {marker_N column in target file: [(marker_id, aruco_dict)]}
             for m in self.dynamic_markers:
                 self._dynamic_markers_cache[self.dynamic_markers[m][1]].append(_marker.MarkerID(m, self.aruco_dict_id))
-        return super(Plane, self).get_marker_IDs() | self._dynamic_markers_cache
+        return super().get_marker_IDs() | self._dynamic_markers_cache
 
     def is_dynamic(self):
-        return not not self.dynamic_markers
+        return bool(self.dynamic_markers)
 
     def get_dynamic_marker_setup(self):
-        return aruco.MarkerSetup(aruco_detector_params = {
-                                    'markerBorderBits': self.marker_border_bits
-                                },
-                                detect_only = True
-                             )
+        return aruco.MarkerSetup(aruco_detector_params={"markerBorderBits": self.marker_border_bits}, detect_only=True)

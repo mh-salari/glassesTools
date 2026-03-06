@@ -1,28 +1,46 @@
-import numpy as np
-import pandas as pd
 import pathlib
 import typing
 from collections import defaultdict
 
+import numpy as np
+import pandas as pd
+
 from . import data_files, drawing, json, naming, ocv
 
+
 class MarkerID(typing.NamedTuple):
-    m_id:           int
-    aruco_dict_id:  int
+    m_id: int
+    aruco_dict_id: int
+
+
 def marker_ID_to_str(m: MarkerID):
     from . import aruco
-    return f'{m.m_id} ({aruco.dict_id_to_str[m.aruco_dict_id]})'
+
+    return f"{m.m_id} ({aruco.dict_id_to_str[m.aruco_dict_id]})"
+
+
 def _serialize_marker_id(m: MarkerID):
     from . import aruco
-    return {'m_id':m.m_id, 'aruco_dict':aruco.dict_id_to_str[m.aruco_dict_id]}
-def _deserialize_marker_id(m: dict[str,str|int]):
+
+    return {"m_id": m.m_id, "aruco_dict": aruco.dict_id_to_str[m.aruco_dict_id]}
+
+
+def _deserialize_marker_id(m: dict[str, str | int]):
     from . import aruco
-    return MarkerID(m_id = m['m_id'],
-                    aruco_dict_id = aruco.str_to_dict_id(m['aruco_dict_id' if 'aruco_dict_id' in m else 'aruco_dict']))
-json.register_type(json.TypeEntry(MarkerID, '__config.MarkerID__', _serialize_marker_id, _deserialize_marker_id))
+
+    return MarkerID(
+        m_id=m["m_id"],
+        aruco_dict_id=aruco.str_to_dict_id(m["aruco_dict_id" if "aruco_dict_id" in m else "aruco_dict"]),
+    )
+
+
+json.register_type(json.TypeEntry(MarkerID, "__config.MarkerID__", _serialize_marker_id, _deserialize_marker_id))
+
 
 class Marker:
-    def __init__(self, key: int, center: np.ndarray, corners: list[np.ndarray]=None, color: str=None, rot: float=0.):
+    def __init__(
+        self, key: int, center: np.ndarray, corners: list[np.ndarray] = None, color: str = None, rot: float = 0.0
+    ):
         self.key = key
         self.center = center
         self.corners = corners
@@ -30,7 +48,7 @@ class Marker:
         self.rot = rot
 
     def __str__(self):
-        ret = '[%d]: center @ (%.2f, %.2f), rot %.0f deg' % (self.key, self.center[0], self.center[1], self.rot)
+        ret = "[%d]: center @ (%.2f, %.2f), rot %.0f deg" % (self.key, self.center[0], self.center[1], self.rot)
         return ret
 
     def shift(self, offset: np.ndarray):
@@ -39,9 +57,10 @@ class Marker:
             for c in self.corners:
                 c += offset
 
+
 def corners_intersection(corners):
-    line1 = ( corners[0], corners[2] )
-    line2 = ( corners[1], corners[3] )
+    line1 = (corners[0], corners[2])
+    line2 = (corners[1], corners[3])
     xdiff = (line1[0][0] - line1[1][0], line2[0][0] - line2[1][0])
     ydiff = (line1[0][1] - line1[1][1], line2[0][1] - line2[1][1])
 
@@ -50,177 +69,203 @@ def corners_intersection(corners):
 
     div = det(xdiff, ydiff)
     if div == 0:
-        raise Exception('lines do not intersect')
+        raise Exception("lines do not intersect")
 
     d = (det(*line1), det(*line2))
     x = det(d, xdiff) / div
     y = det(d, ydiff) / div
-    return np.array( [x,y] ).astype('float32')
+    return np.array([x, y]).astype("float32")
+
 
 class Pose:
     # description of tsv file used for storage
-    _columns_compressed = {'frame_idx': 1, 'R_vec': 3, 'T_vec': 3}
-    _non_float          = {'frame_idx': int}
+    _columns_compressed = {"frame_idx": 1, "R_vec": 3, "T_vec": 3}
+    _non_float = {"frame_idx": int}
 
-    def __init__(self,
-                 frame_idx  : int,
-                 R_vec      : np.ndarray= None,
-                 T_vec      : np.ndarray= None):
-        self.frame_idx  : int         = frame_idx
-        self.R_vec      : np.ndarray  = R_vec
-        self.T_vec      : np.ndarray  = T_vec
+    def __init__(self, frame_idx: int, R_vec: np.ndarray = None, T_vec: np.ndarray = None):
+        self.frame_idx: int = frame_idx
+        self.R_vec: np.ndarray = R_vec
+        self.T_vec: np.ndarray = T_vec
 
     def pose_successful(self):
         return self.R_vec is not None and self.T_vec is not None
 
-    def draw_frame_axis(self, frame, camera_params: ocv.CameraParams, arm_length, sub_pixel_fac = 8):
+    def draw_frame_axis(self, frame, camera_params: ocv.CameraParams, arm_length, sub_pixel_fac=8):
         if not camera_params.has_intrinsics():
             return
         drawing.openCVFrameAxis(frame, camera_params, self.R_vec, self.T_vec, arm_length, 3, sub_pixel_fac)
 
 
-def read_dict_from_file(fileName:str|pathlib.Path, episodes:list[list[int]]=None) -> dict[int,Pose]:
-    return data_files.read_file(fileName,
-                                Pose, True, True, False, False,
-                                episodes=episodes)[0]
+def read_dict_from_file(fileName: str | pathlib.Path, episodes: list[list[int]] = None) -> dict[int, Pose]:
+    return data_files.read_file(fileName, Pose, True, True, False, False, episodes=episodes)[0]
 
-def write_list_to_file(poses: list[Pose], fileName:str|pathlib.Path, skip_failed=False):
-    data_files.write_array_to_file(poses, fileName,
-                                   Pose._columns_compressed,
-                                   skip_all_nan=skip_failed)
 
-def get_file_name(marker_id: int, aruco_dict_id: int, folder: str|pathlib.Path|None) -> pathlib.Path:
+def write_list_to_file(poses: list[Pose], fileName: str | pathlib.Path, skip_failed=False):
+    data_files.write_array_to_file(poses, fileName, Pose._columns_compressed, skip_all_nan=skip_failed)
+
+
+def get_file_name(marker_id: int, aruco_dict_id: int, folder: str | pathlib.Path | None) -> pathlib.Path:
     from . import aruco
-    file_name = f'{naming.marker_pose_prefix}{aruco.dict_id_to_str[aruco_dict_id]}_{marker_id}.tsv'
+
+    file_name = f"{naming.marker_pose_prefix}{aruco.dict_id_to_str[aruco_dict_id]}_{marker_id}.tsv"
     if folder is None:
         return file_name
     folder = pathlib.Path(folder)
     return folder / file_name
 
-def read_dataframe_from_file(marker_id: int, aruco_dict_id: int, folder: str|pathlib.Path) -> pd.DataFrame:
+
+def read_dataframe_from_file(marker_id: int, aruco_dict_id: int, folder: str | pathlib.Path) -> pd.DataFrame:
     file = get_file_name(marker_id, aruco_dict_id, folder)
-    return pd.read_csv(file,sep='\t', dtype=defaultdict(lambda: float, **Pose._non_float))
+    return pd.read_csv(file, sep="\t", dtype=defaultdict(lambda: float, **Pose._non_float))
 
 
 @typing.overload
 def code_for_presence(markers: pd.DataFrame, allow_failed=False) -> pd.DataFrame: ...
-def code_for_presence(markers: dict[typing.Any, pd.DataFrame], allow_failed=False) -> dict[typing.Any, pd.DataFrame]: ...
-def code_for_presence(markers: pd.DataFrame|dict[typing.Any, pd.DataFrame], allow_failed=False) -> pd.DataFrame|dict[typing.Any, pd.DataFrame]:
-    if isinstance(markers,dict):
+def code_for_presence(
+    markers: dict[typing.Any, pd.DataFrame], allow_failed=False
+) -> dict[typing.Any, pd.DataFrame]: ...
+def code_for_presence(
+    markers: pd.DataFrame | dict[typing.Any, pd.DataFrame], allow_failed=False
+) -> pd.DataFrame | dict[typing.Any, pd.DataFrame]:
+    if isinstance(markers, dict):
         for i in markers:
-            markers[i] = _code_for_presence_impl(markers[i], f'{i}_', allow_failed)
+            markers[i] = _code_for_presence_impl(markers[i], f"{i}_", allow_failed)
     else:
-        markers = _code_for_presence_impl(markers,'', allow_failed)
+        markers = _code_for_presence_impl(markers, "", allow_failed)
     return markers
 
-def _code_for_presence_impl(markers: pd.DataFrame, lbl_extra:str, allow_failed=False) -> pd.DataFrame:
-    new_col_lbl = f'marker_{lbl_extra}presence'
-    markers.insert(len(markers.columns),
+
+def _code_for_presence_impl(markers: pd.DataFrame, lbl_extra: str, allow_failed=False) -> pd.DataFrame:
+    new_col_lbl = f"marker_{lbl_extra}presence"
+    markers.insert(
+        len(markers.columns),
         new_col_lbl,
-        True if allow_failed else markers[[c for c in markers.columns if c not in ['frame_idx']]].notnull().all(axis='columns')
+        True
+        if allow_failed
+        else markers[[c for c in markers.columns if c not in ["frame_idx"]]].notnull().all(axis="columns"),
     )
-    markers = markers[['frame_idx',new_col_lbl]] if 'frame_idx' in markers else markers[[new_col_lbl]]
-    markers = markers.astype({new_col_lbl: bool}) # ensure the new column is bool
+    markers = markers[["frame_idx", new_col_lbl]] if "frame_idx" in markers else markers[[new_col_lbl]]
+    markers = markers.astype({new_col_lbl: bool})  # ensure the new column is bool
     return markers
+
 
 def expand_detection(markers: pd.DataFrame, fill_value):
-    if 'frame_idx' in markers.columns:
-        min_fr_idx = markers['frame_idx'].min()
-        max_fr_idx = markers['frame_idx'].max()
-        new_index = pd.Index(range(min_fr_idx,max_fr_idx+1), name='frame_idx')
-        return markers.set_index('frame_idx').reindex(new_index, fill_value=fill_value).reset_index()
-    else:
-        if markers.index.name!='frame_idx':
-            raise ValueError(f'It was expected that the name of the index is "frame_idx". It was "{markers.index.name}" instead. This may mean this dataframe does not contain the expected information. Cannot continue.')
-        min_fr_idx = markers.index.min()
-        max_fr_idx = markers.index.max()
-        new_index = pd.Index(range(min_fr_idx,max_fr_idx+1), name='frame_idx')
-        return markers.reindex(new_index, fill_value=fill_value)
+    if "frame_idx" in markers.columns:
+        min_fr_idx = markers["frame_idx"].min()
+        max_fr_idx = markers["frame_idx"].max()
+        new_index = pd.Index(range(min_fr_idx, max_fr_idx + 1), name="frame_idx")
+        return markers.set_index("frame_idx").reindex(new_index, fill_value=fill_value).reset_index()
+    if markers.index.name != "frame_idx":
+        raise ValueError(
+            f'It was expected that the name of the index is "frame_idx". It was "{markers.index.name}" instead. This may mean this dataframe does not contain the expected information. Cannot continue.'
+        )
+    min_fr_idx = markers.index.min()
+    max_fr_idx = markers.index.max()
+    new_index = pd.Index(range(min_fr_idx, max_fr_idx + 1), name="frame_idx")
+    return markers.reindex(new_index, fill_value=fill_value)
+
 
 def get_appearance_starts_ends(m: pd.DataFrame, max_gap_duration: int, min_duration: int):
-    vals   = np.pad(m['marker_presence'].values.astype(int), (1, 1), 'constant', constant_values=(0, 0))
-    d      = np.diff(vals)
+    vals = np.pad(m["marker_presence"].values.astype(int), (1, 1), "constant", constant_values=(0, 0))
+    d = np.diff(vals)
     starts = np.nonzero(d == 1)[0]
-    ends   = np.nonzero(d == -1)[0]
-    gaps   = starts[1:]-ends[:-1]
+    ends = np.nonzero(d == -1)[0]
+    gaps = starts[1:] - ends[:-1]
     # fill gaps in marker detection
-    gapi   = np.nonzero(gaps<=max_gap_duration)[0]
-    starts = np.delete(starts,gapi+1)
-    ends   = np.delete(ends,gapi)
+    gapi = np.nonzero(gaps <= max_gap_duration)[0]
+    starts = np.delete(starts, gapi + 1)
+    ends = np.delete(ends, gapi)
     # remove too short
-    lengths= ends-starts
-    shorti = np.nonzero(lengths<min_duration)[0]
-    starts = np.delete(starts,shorti)
-    ends   = np.delete(ends,shorti)
+    lengths = ends - starts
+    shorti = np.nonzero(lengths < min_duration)[0]
+    starts = np.delete(starts, shorti)
+    ends = np.delete(ends, shorti)
     # turn first and last frames into frame_idx values
-    if 'frame_idx' in m.columns:
-        return m.loc[starts,'frame_idx'].to_numpy(copy=True), m.loc[ends-1,'frame_idx'].to_numpy(copy=True) # NB: -1 so that ends point to last frame during which marker was last seen (and to not index out of the array)
-    elif m.index.name=='frame_idx':
-        return m.index[starts].to_numpy(copy=True), m.index[ends-1].to_numpy(copy=True)
+    if "frame_idx" in m.columns:
+        return (
+            m.loc[starts, "frame_idx"].to_numpy(copy=True),
+            m.loc[ends - 1, "frame_idx"].to_numpy(copy=True),
+        )  # NB: -1 so that ends point to last frame during which marker was last seen (and to not index out of the array)
+    if m.index.name == "frame_idx":
+        return m.index[starts].to_numpy(copy=True), m.index[ends - 1].to_numpy(copy=True)
 
-def get_sequence_interval(starts: dict[MarkerID,list[int]], ends: dict[MarkerID,list[int]], pattern: list[MarkerID], max_intermarker_gap_duration: int, side='start') -> np.ndarray:
+
+def get_sequence_interval(
+    starts: dict[MarkerID, list[int]],
+    ends: dict[MarkerID, list[int]],
+    pattern: list[MarkerID],
+    max_intermarker_gap_duration: int,
+    side="start",
+) -> np.ndarray:
     # find marker pattern (sequence of markers following in right order with gap no longer than max_intermarker_gap_duration)
-    pairs: list[tuple[int,int]] = []
+    pairs: list[tuple[int, int]] = []
     for i in range(len(ends[pattern[0]])):
         end_idx = i
-        for j in range(len(pattern)-1):
+        for j in range(len(pattern) - 1):
             if end_idx is None:
                 break
-            end     = ends[pattern[j]][end_idx]
-            gaps    = starts[pattern[j+1]]-end
-            end_idx = get_smallest_gap_end(gaps,max_intermarker_gap_duration)
+            end = ends[pattern[j]][end_idx]
+            gaps = starts[pattern[j + 1]] - end
+            end_idx = get_smallest_gap_end(gaps, max_intermarker_gap_duration)
         if end_idx is not None:
             pairs.append((starts[pattern[0]][i], ends[pattern[-1]][end_idx]))
 
-    idx = 0 if side=='start' else 1
+    idx = 0 if side == "start" else 1
     return np.array([p[idx] for p in pairs])
 
+
 def get_smallest_gap_end(gaps: np.ndarray, max_intermarker_gap_duration: int):
-    gapi = np.nonzero(np.logical_and(gaps>=0, gaps<=max_intermarker_gap_duration))[0]
+    gapi = np.nonzero(np.logical_and(gaps >= 0, gaps <= max_intermarker_gap_duration))[0]
     if gapi.size:
         # if there are multiple that qualify, take the smallest gap
         mini = np.argmin(gaps[gapi])
         return gapi[mini]
     return None
 
-def format_duplicate_markers_msg(markers: set[tuple[int,int]]):
+
+def format_duplicate_markers_msg(markers: set[tuple[int, int]]):
     from . import aruco
+
     # NB: input should be dictionary families, not dicts themselves
     # organize per dictionary family
-    dict_markers: dict[int,list[int]] = defaultdict(list)
-    for m,d in markers:
+    dict_markers: dict[int, list[int]] = defaultdict(list)
+    for m, d in markers:
         dict_markers[d].append(m)
-    dict_markers = {d:sorted(dict_markers[d]) for d in dict_markers}
-    out = ''
-    for i,d in enumerate(dict_markers):
-        s = 's' if len(dict_markers[d])>1 else ''
-        ids = ', '.join((str(x) for x in dict_markers[d]))
-        d_str,is_family = aruco.family_to_str[d]
-        f_str = ' family' if is_family else ''
-        msg = f'marker{s} {ids} for the {d_str} dictionary{f_str}'
-        if i==0:
+    dict_markers = {d: sorted(dict_markers[d]) for d in dict_markers}
+    out = ""
+    for i, d in enumerate(dict_markers):
+        s = "s" if len(dict_markers[d]) > 1 else ""
+        ids = ", ".join(str(x) for x in dict_markers[d])
+        d_str, is_family = aruco.family_to_str[d]
+        f_str = " family" if is_family else ""
+        msg = f"marker{s} {ids} for the {d_str} dictionary{f_str}"
+        if i == 0:
             out = msg
-        elif i==len(dict_markers)-1:
-            out += f' and {msg}'
+        elif i == len(dict_markers) - 1:
+            out += f" and {msg}"
         else:
-            out += f', {msg}'
+            out += f", {msg}"
     return out
 
-def format_marker_sequence_msg(marker_set: list[tuple[int,int]]):
+
+def format_marker_sequence_msg(marker_set: list[tuple[int, int]]):
     from . import aruco
+
     # NB: input should be dictionary families, not dicts themselves
     # turn each dict into a string/family
-    marker_set_str: list[tuple[str,bool,int]] = []
-    all_same_family_or_dict = len(set((x[0] for x in marker_set)))==1
+    marker_set_str: list[tuple[str, bool, int]] = []
+    all_same_family_or_dict = len(set(x[0] for x in marker_set)) == 1
     marker_set.sort(key=lambda x: x[0])
     if not all_same_family_or_dict:
         marker_set.sort(key=lambda x: x[1])
     for m in marker_set:
-        d_str,is_family = aruco.family_to_str[m[1]]
+        d_str, is_family = aruco.family_to_str[m[1]]
         marker_set_str.append((d_str, is_family, m[0]))
     if all_same_family_or_dict:
-        m_str = ', '.join((str(m[2]) for m in marker_set_str))
-        m_str += ' from the ' + (f'{marker_set_str[0][0]} family' if marker_set_str[0][1] else f'{marker_set_str[0][0]} dict')
+        m_str = ", ".join(str(m[2]) for m in marker_set_str)
+        m_str += " from the " + (
+            f"{marker_set_str[0][0]} family" if marker_set_str[0][1] else f"{marker_set_str[0][0]} dict"
+        )
     else:
-        m_str = ', '.join((f'{m[2]} ({m[0] + (" family" if m[1] else "")})' for m in marker_set_str))
+        m_str = ", ".join(f"{m[2]} ({m[0] + (' family' if m[1] else '')})" for m in marker_set_str)
     return m_str

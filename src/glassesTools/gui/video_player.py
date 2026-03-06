@@ -1,118 +1,133 @@
-import threading
-import numpy as np
-import functools
-from enum import Enum, auto
 import dataclasses
+import functools
+import string
+import threading
+from enum import Enum, auto
 from typing import Any
-import natsort
 
-from imgui_bundle import imgui, immapp, hello_imgui, glfw_utils, icons_fontawesome_6 as ifa6
 import glfw
+import natsort
+import numpy as np
 import OpenGL.GL as gl
+from imgui_bundle import glfw_utils, hello_imgui, imgui, immapp
+from imgui_bundle import icons_fontawesome_6 as ifa6
 
 from .. import annotation, intervals, timestamps, utils
-from . import timeline, utils as gui_utils
+from . import timeline
+from . import utils as gui_utils
+
 
 class Action(Enum):
-    Back_Time       = auto()
-    Forward_Time    = auto()
-    Back_Frame      = auto()
-    Forward_Frame   = auto()
-    Pause           = auto()
-    Close           = auto()
-    Quit            = auto()    # difference between Close and Quit: Quit requests stopping the whole process, Close only to remove the GUI but keep the process running
-    Annotate_Make   = auto()
+    Back_Time = auto()
+    Forward_Time = auto()
+    Back_Frame = auto()
+    Forward_Frame = auto()
+    Pause = auto()
+    Close = auto()
+    Quit = auto()  # difference between Close and Quit: Quit requests stopping the whole process, Close only to remove the GUI but keep the process running
+    Annotate_Make = auto()
     Annotate_Delete = auto()
 
 
 shortcut_key_map = {
-    Action.Back_Time        : imgui.Key.left_arrow,
-    Action.Forward_Time     : imgui.Key.right_arrow,
-    Action.Back_Frame       : imgui.Key.j,
-    Action.Forward_Frame    : imgui.Key.k,
-    Action.Pause            : imgui.Key.space,
-    Action.Close            : imgui.Key.escape,
-    Action.Quit             : imgui.Key.enter,
-    Action.Annotate_Delete  : imgui.Key.d
+    Action.Back_Time: imgui.Key.left_arrow,
+    Action.Forward_Time: imgui.Key.right_arrow,
+    Action.Back_Frame: imgui.Key.j,
+    Action.Forward_Frame: imgui.Key.k,
+    Action.Pause: imgui.Key.space,
+    Action.Close: imgui.Key.escape,
+    Action.Quit: imgui.Key.enter,
+    Action.Annotate_Delete: imgui.Key.d,
 }
 
-action_lbl_map: dict[Action, str|tuple[str,str]] = {
-    Action.Back_Time        : ifa6.ICON_FA_BACKWARD_FAST,
-    Action.Forward_Time     : ifa6.ICON_FA_FORWARD_FAST,
-    Action.Back_Frame       : ifa6.ICON_FA_BACKWARD_STEP,
-    Action.Forward_Frame    : ifa6.ICON_FA_FORWARD_STEP,
-    Action.Pause            : (ifa6.ICON_FA_PLAY, ifa6.ICON_FA_PAUSE),  # (no_playing, playing)
-    Action.Close            : "Continue in background",
-    Action.Quit             : "Done",
-    Action.Annotate_Delete  : ifa6.ICON_FA_TRASH_CAN
+action_lbl_map: dict[Action, str | tuple[str, str]] = {
+    Action.Back_Time: ifa6.ICON_FA_BACKWARD_FAST,
+    Action.Forward_Time: ifa6.ICON_FA_FORWARD_FAST,
+    Action.Back_Frame: ifa6.ICON_FA_BACKWARD_STEP,
+    Action.Forward_Frame: ifa6.ICON_FA_FORWARD_STEP,
+    Action.Pause: (ifa6.ICON_FA_PLAY, ifa6.ICON_FA_PAUSE),  # (no_playing, playing)
+    Action.Close: "Continue in background",
+    Action.Quit: "Done",
+    Action.Annotate_Delete: ifa6.ICON_FA_TRASH_CAN,
 }
 
 action_tooltip_map = {
-    Action.Back_Time        : "Back 1 s (with shift 10 s)",
-    Action.Forward_Time     : "Forward 1 s (with shift 10 s)",
-    Action.Back_Frame       : "Back 1 frame (with shift 10 frames)",
-    Action.Forward_Frame    : "Forward 1 frame (with shift 10 frames)",
-    Action.Pause            : "Pause or resume playback",
-    Action.Close            : "Close GUI, but keep process running in background",
-    Action.Quit             : "Done",
-    Action.Annotate_Delete  : "Delete annotation"
+    Action.Back_Time: "Back 1 s (with shift 10 s)",
+    Action.Forward_Time: "Forward 1 s (with shift 10 s)",
+    Action.Back_Frame: "Back 1 frame (with shift 10 frames)",
+    Action.Forward_Frame: "Forward 1 frame (with shift 10 frames)",
+    Action.Pause: "Pause or resume playback",
+    Action.Close: "Close GUI, but keep process running in background",
+    Action.Quit: "Done",
+    Action.Annotate_Delete: "Delete annotation",
 }
+
 
 @dataclasses.dataclass
 class Button:
     action: Action
     lbl: str
-    tooltip: str|None
-    key: imgui.Key|None
-    event: str|None = None
-    color: imgui.ImVec4|None = None
+    tooltip: str | None
+    key: imgui.Key | None
+    event: str | None = None
+    color: imgui.ImVec4 | None = None
 
     has_shift: bool = dataclasses.field(init=False, default=False)
-    repeats: bool =  dataclasses.field(init=False, default=False)
-    full_tooltip: str = dataclasses.field(init=False, default='')
+    repeats: bool = dataclasses.field(init=False, default=False)
+    full_tooltip: str = dataclasses.field(init=False, default="")
 
     def __post_init__(self):
         self.setup_accelerators_tooltip()
 
     def setup_accelerators_tooltip(self):
-        self.has_shift = self.action in [Action.Back_Time, Action.Back_Frame, Action.Forward_Frame, Action.Forward_Time]
+        self.has_shift = self.action in [
+            Action.Back_Time,
+            Action.Back_Frame,
+            Action.Forward_Frame,
+            Action.Forward_Time,
+        ]
         self.repeats = self.has_shift
 
-        accelerator = imgui.get_key_name(self.key) if self.key is not None else ''
+        accelerator = imgui.get_key_name(self.key) if self.key is not None else ""
         if accelerator and self.has_shift:
             mod_lbl = imgui.get_key_name(imgui.Key.mod_shift)
-            if mod_lbl.lower().startswith('mod'):
+            if mod_lbl.lower().startswith("mod"):
                 mod_lbl = mod_lbl[3:]
-            accelerator = f'{accelerator} or {mod_lbl}+{accelerator}'
+            accelerator = f"{accelerator} or {mod_lbl}+{accelerator}"
         if self.event is not None and self.tooltip is not None:
-            self.tooltip = f'Make {self.tooltip.lower()} annotation'
-        self.full_tooltip = (self.tooltip if self.tooltip else '') + (' 'if self.tooltip and accelerator else '') + (f'({accelerator})' if accelerator else '')
+            self.tooltip = f"Make {self.tooltip.lower()} annotation"
+        self.full_tooltip = (
+            (self.tooltip or "")
+            + (" " if self.tooltip and accelerator else "")
+            + (f"({accelerator})" if accelerator else "")
+        )
 
 
 # GUI provider for viewer and coder windows
 class GUI:
     main_window_id = 0
+
     def __init__(self, use_thread=True):
         self._running = False
         self._should_exit = False
-        self._use_thread = use_thread # NB: on MacOSX the GUI needs to be on the main thread, see https://github.com/pthom/hello_imgui/issues/33
+        self._use_thread = use_thread  # NB: on MacOSX the GUI needs to be on the main thread, see https://github.com/pthom/hello_imgui/issues/33
         self._thread: threading.Thread = None
         self._not_shown_yet: dict[int, bool] = {}
         self._new_frame: dict[int, tuple[np.ndarray, float, int]] = {}
         self._new_frame_lock: threading.Lock = threading.Lock()
         self._current_frame: dict[int, tuple[np.ndarray, float, int]] = {}
-        self._frame_size: dict[int, tuple[int,int]] = {}
-        self._texID: dict[int,int] = {}
+        self._frame_size: dict[int, tuple[int, int]] = {}
+        self._texID: dict[int, int] = {}
 
         self._duration: float = None
         self._last_frame_idx: int = None
 
-        self._action_tooltips   = action_tooltip_map.copy()
-        self._action_button_lbls= action_lbl_map.copy()
-        self._shortcut_key_map  = shortcut_key_map.copy()
-        self._annotate_shortcut_key_map: dict[str, imgui.Key]                             = {}
-        self._annotate_tooltips        : dict[str, str]                                   = {}
-        self._annotations_frame        : dict[str, tuple[annotation.EventType,list[int]]] = None
+        self._action_tooltips = action_tooltip_map.copy()
+        self._action_button_lbls = action_lbl_map.copy()
+        self._shortcut_key_map = shortcut_key_map.copy()
+        self._annotate_shortcut_key_map: dict[str, imgui.Key] = {}
+        self._annotate_tooltips: dict[str, str] = {}
+        self._annotations_frame: dict[str, tuple[annotation.EventType, list[int]]] = None
 
         self._interruptible = True
         self._detachable = False
@@ -123,27 +138,27 @@ class GUI:
         self._timeline_show_annotation_labels = True
         self._timeline_show_info_on_hover = True
         self._is_playing = False
-        self._requests: list[tuple[str,Any]] = []
+        self._requests: list[tuple[str, Any]] = []
 
         self._next_window_id: int = GUI.main_window_id
         self._windows_lock: threading.Lock = threading.Lock()
-        self._windows: dict[int,str] = {}
+        self._windows: dict[int, str] = {}
         self._window_flags = int(
-                                    imgui.WindowFlags_.no_title_bar |
-                                    imgui.WindowFlags_.no_collapse |
-                                    imgui.WindowFlags_.no_scrollbar |
-                                    imgui.WindowFlags_.no_resize        # no resize gripper in window's bottom-right
-                                )
-        self._window_visible: dict[int,bool] = {}
-        self._window_determine_size: dict[int,bool] = {}
-        self._window_show_controls: dict[int,bool] = {}
-        self._window_show_action_tooltip: dict[int,bool] = {}
-        self._window_show_play_percentage: dict[int,bool] = {}
-        self._window_sfac: dict[int,float] = {}
-        self._window_timeline: dict[int,timeline.Timeline|None] = {}
-        self._window_timecode_pos: dict[int,str] = {}
+            imgui.WindowFlags_.no_title_bar
+            | imgui.WindowFlags_.no_collapse
+            | imgui.WindowFlags_.no_scrollbar
+            | imgui.WindowFlags_.no_resize  # no resize gripper in window's bottom-right
+        )
+        self._window_visible: dict[int, bool] = {}
+        self._window_determine_size: dict[int, bool] = {}
+        self._window_show_controls: dict[int, bool] = {}
+        self._window_show_action_tooltip: dict[int, bool] = {}
+        self._window_show_play_percentage: dict[int, bool] = {}
+        self._window_sfac: dict[int, float] = {}
+        self._window_timeline: dict[int, timeline.Timeline | None] = {}
+        self._window_timecode_pos: dict[int, str] = {}
 
-        self._buttons: dict[Action|tuple[Action,str], Button] = {}
+        self._buttons: dict[Action | tuple[Action, str], Button] = {}
         self._add_remove_button(True, Action.Quit)
 
     def __del__(self):
@@ -152,27 +167,27 @@ class GUI:
     def add_window(self, name: str) -> int:
         with self._windows_lock:
             w_id = self._next_window_id
-            self._windows[w_id]                 = name
-            self._not_shown_yet[w_id]           = True
-            self._texID[w_id]                   = None
-            self._new_frame[w_id]               = (None, None, -1)
-            self._current_frame[w_id]           = (None, None, -1)
-            self._frame_size[w_id]              = (-1, -1)
-            self._window_visible[w_id]          = False
-            self._window_determine_size[w_id]   = False
-            self._window_show_controls[w_id]    = False
-            self._window_show_action_tooltip[w_id]  = False
+            self._windows[w_id] = name
+            self._not_shown_yet[w_id] = True
+            self._texID[w_id] = None
+            self._new_frame[w_id] = (None, None, -1)
+            self._current_frame[w_id] = (None, None, -1)
+            self._frame_size[w_id] = (-1, -1)
+            self._window_visible[w_id] = False
+            self._window_determine_size[w_id] = False
+            self._window_show_controls[w_id] = False
+            self._window_show_action_tooltip[w_id] = False
             self._window_show_play_percentage[w_id] = False
-            self._window_sfac[w_id]             = 1.
-            self._window_timeline[w_id]         = None
-            self._window_timecode_pos[w_id]     = 'l'
+            self._window_sfac[w_id] = 1.0
+            self._window_timeline[w_id] = None
+            self._window_timecode_pos[w_id] = "l"
 
             self._next_window_id += 1
             return w_id
 
     def delete_window(self, window_id: int):
-        if window_id==GUI.main_window_id:
-            raise ValueError('It is not possible to delete the main window')
+        if window_id == GUI.main_window_id:
+            raise ValueError("It is not possible to delete the main window")
         with self._windows_lock:
             self._windows.pop(window_id)
             self._not_shown_yet.pop(window_id)
@@ -192,12 +207,15 @@ class GUI:
     def set_interruptible(self, interruptible: bool):
         self._interruptible = interruptible
         self._add_remove_button(self._interruptible, Action.Quit)
+
     def set_detachable(self, detachable: bool):
         self._detachable = detachable
         self._add_remove_button(self._detachable, Action.Close)
+
     def set_allow_pause(self, allow_pause: bool):
         self._allow_pause = allow_pause
         self._add_remove_button(self._allow_pause, Action.Pause)
+
     def set_allow_seek(self, allow_seek: bool):
         self._allow_seek = allow_seek
         for w in self._windows:
@@ -207,12 +225,15 @@ class GUI:
         self._add_remove_button(self._allow_seek, Action.Forward_Time)
         self._add_remove_button(self._allow_seek, Action.Back_Frame)
         self._add_remove_button(self._allow_seek, Action.Forward_Frame)
-    def set_button_props_for_action(self, action: Action, lbl: str|None=None, key: imgui.Key|None=None, tooltip: str|None=None):
+
+    def set_button_props_for_action(
+        self, action: Action, lbl: str | None = None, key: imgui.Key | None = None, tooltip: str | None = None
+    ):
         if not lbl and not key and not tooltip:
             # nothing to do
             return
         # find button in question
-        button = next((b for k,b in self._buttons.items() if self._buttons[k].action==action), None)
+        button = next((b for k, b in self._buttons.items() if self._buttons[k].action == action), None)
         if button is None:
             # no button for this action, nothing to do
             return
@@ -225,23 +246,22 @@ class GUI:
         # reset accelerators, tooltip
         button.setup_accelerators_tooltip()
 
-    def get_shortcut_keys(self, include_annotate: bool=True, include_unused: bool=False) -> set[str]:
+    def get_shortcut_keys(self, include_annotate: bool = True, include_unused: bool = False) -> set[str]:
         keys = set()
         for b in self._buttons.values():
-            if b.key is not None and (include_annotate or b.action!=Action.Annotate_Make):
+            if b.key is not None and (include_annotate or b.action != Action.Annotate_Make):
                 keys.add(imgui.get_key_name(b.key))
         if include_unused:
-            for key in self._shortcut_key_map.values():
-                keys.add(imgui.get_key_name(key))
+            keys.update(imgui.get_key_name(key) for key in self._shortcut_key_map.values())
         return keys
 
-    def _add_remove_button(self, add: bool, action: Action, event: str|None=None):
-        d_key = (action,event) if event else action
+    def _add_remove_button(self, add: bool, action: Action, event: str | None = None):
+        d_key = (action, event) if event else action
         self._buttons.pop(d_key, None)
-        if add: # NB: nothing to do for remove, already removed
-            if action==Action.Annotate_Make:
+        if add:  # NB: nothing to do for remove, already removed
+            if action == Action.Annotate_Make:
                 if event is None:
-                    raise ValueError(f'Cannot set an annotate action without a provided event')
+                    raise ValueError("Cannot set an annotate action without a provided event")
                 lbl = event
                 tooltip = self._annotate_tooltips.get(event, None)
                 key = self._annotate_shortcut_key_map.get(event, None)
@@ -256,29 +276,40 @@ class GUI:
         for w in self._windows:
             if self._window_timeline[w] is not None:
                 self._window_timeline[w].set_allow_timeline_zoom(allow_timeline_zoom)
-    def set_show_controls(self, show_controls: bool, window_id: int|None=None):
+
+    def set_show_controls(self, show_controls: bool, window_id: int | None = None):
         if window_id is None:
             window_id = self._get_main_window_id()
         self._window_show_controls[window_id] = show_controls
-    def set_show_action_tooltip(self, show_action_tooltip: bool, window_id: int|None=None):
+
+    def set_show_action_tooltip(self, show_action_tooltip: bool, window_id: int | None = None):
         if window_id is None:
             window_id = self._get_main_window_id()
         self._window_show_action_tooltip[window_id] = show_action_tooltip
-    def set_timecode_position(self, position, window_id: int|None=None):
+
+    def set_timecode_position(self, position, window_id: int | None = None):
         if window_id is None:
             window_id = self._get_main_window_id()
-        if position not in ['l','r']:
+        if position not in ["l", "r"]:
             raise ValueError(f"For position, only 'l' and 'r' are understood, not '{position}'")
         self._window_timecode_pos[window_id] = position
-    def set_show_play_percentage(self, show_play_percentage: bool, window_id: int|None=None):
+
+    def set_show_play_percentage(self, show_play_percentage: bool, window_id: int | None = None):
         if window_id is None:
             window_id = self._get_main_window_id()
         self._window_show_play_percentage[window_id] = show_play_percentage
+
     def set_duration(self, duration: float, last_frame_idx: int):
         self._duration = duration
         self._last_frame_idx = last_frame_idx
 
-    def set_show_timeline(self, show_timeline: bool, video_ts: timestamps.VideoTimestamps, annotations: dict[str, tuple[annotation.EventType,list[int]]]|None=None, window_id: int|None=None):
+    def set_show_timeline(
+        self,
+        show_timeline: bool,
+        video_ts: timestamps.VideoTimestamps,
+        annotations: dict[str, tuple[annotation.EventType, list[int]]] | None = None,
+        window_id: int | None = None,
+    ):
         if window_id is None:
             window_id = self._get_main_window_id()
 
@@ -289,7 +320,9 @@ class GUI:
             self._window_timeline[window_id].set_allow_timeline_zoom(self._allow_timeline_zoom)
             self._window_timeline[window_id].set_show_annotation_labels(self._timeline_show_annotation_labels)
             self._window_timeline[window_id].set_show_info_on_hover(self._timeline_show_info_on_hover)
-            self._window_timeline[window_id].set_annotation_keys(self._annotate_shortcut_key_map, self._annotate_tooltips)
+            self._window_timeline[window_id].set_annotation_keys(
+                self._annotate_shortcut_key_map, self._annotate_tooltips
+            )
             last_frame_idx, duration = video_ts.get_last()
             self.set_duration(duration, last_frame_idx)
         else:
@@ -297,28 +330,43 @@ class GUI:
         if annotations is not None and self._any_has_timeline():
             self._annotations_frame = annotations
         self._create_annotation_buttons()
-    def get_annotation_colors(self, window_id: int|None=None):
+
+    def get_annotation_colors(self, window_id: int | None = None):
         if window_id is None:
             window_id = self._get_main_window_id()
         if self._window_timeline[window_id] is None:
             return None
         colors = self._window_timeline[window_id].get_annotation_colors()
-        return {e:(colors[e].value.x,colors[e].value.y,colors[e].value.z,colors[e].value.w) for e in colors}
+        return {e: (colors[e].value.x, colors[e].value.y, colors[e].value.z, colors[e].value.w) for e in colors}
 
-    def set_allow_annotate(self, allow_annotate: set[str], annotate_shortcut_key_map: dict[str, str|imgui.Key]|None=None, annotate_tooltips: dict[str, str]|None=None):
+    def set_allow_annotate(
+        self,
+        allow_annotate: set[str],
+        annotate_shortcut_key_map: dict[str, str | imgui.Key] | None = None,
+        annotate_tooltips: dict[str, str] | None = None,
+    ):
         self._allow_annotate = allow_annotate
         if annotate_shortcut_key_map is not None:
             # check if keys are not already used
             used_keys = {k.lower() for k in self.get_shortcut_keys(include_annotate=False)}
-            used_keys.add(imgui.get_key_name(self._shortcut_key_map[Action.Annotate_Delete]).lower())   # this key isn't used yet, but will be by the end of this function for deleting annotations
-            for e,k in annotate_shortcut_key_map.items():
-                key_name = k if isinstance(k,str) else imgui.get_key_name(k)
+            used_keys.add(
+                imgui.get_key_name(self._shortcut_key_map[Action.Annotate_Delete]).lower()
+            )  # this key isn't used yet, but will be by the end of this function for deleting annotations
+            for e, k in annotate_shortcut_key_map.items():
+                key_name = k if isinstance(k, str) else imgui.get_key_name(k)
                 if key_name.lower() in used_keys:
-                    raise ValueError(f'The shortcut key "{key_name}" provided for annotation event "{e}" is already used by another action')
-                used_keys.add(key_name.lower()) # ensure we also block this key for next annotations
+                    raise ValueError(
+                        f'The shortcut key "{key_name}" provided for annotation event "{e}" is already used by another action'
+                    )
+                used_keys.add(key_name.lower())  # ensure we also block this key for next annotations
             # if key is "0"..."9", convert to "_0"..."_9"
-            annotate_shortcut_key_map = {e:(f'_{k}' if (isinstance(k,str) and k in '0123456789') else k) for e,k in annotate_shortcut_key_map.items()}
-            self._annotate_shortcut_key_map = {e:(k if isinstance(k,imgui.Key) else imgui.Key[k]) for e,k in annotate_shortcut_key_map.items()}
+            annotate_shortcut_key_map = {
+                e: (f"_{k}" if (isinstance(k, str) and k in string.digits) else k)
+                for e, k in annotate_shortcut_key_map.items()
+            }
+            self._annotate_shortcut_key_map = {
+                e: (k if isinstance(k, imgui.Key) else imgui.Key[k]) for e, k in annotate_shortcut_key_map.items()
+            }
         self._annotate_tooltips = annotate_tooltips or {}
         for w in self._windows:
             if self._window_timeline[w] is not None and self._window_timeline[w].get_num_annotations():
@@ -328,15 +376,19 @@ class GUI:
 
     def _has_timeline(self, window_id: int):
         return self._window_timeline[window_id] is not None and self._window_timeline[window_id].get_num_annotations()
+
     def _any_has_timeline(self):
         for w in self._windows:
             if self._has_timeline(w):
                 return True
         return False
+
     def _create_annotation_buttons(self):
         any_timeline = self._any_has_timeline()
         # for safety, remove all already registered events
-        self._buttons = {k:v for k,v in self._buttons.items() if not isinstance(k,tuple) or k[0]!=Action.Annotate_Make}
+        self._buttons = {
+            k: v for k, v in self._buttons.items() if not isinstance(k, tuple) or k[0] != Action.Annotate_Make
+        }
         self._add_remove_button(any_timeline and self._allow_annotate, Action.Annotate_Delete)
         # and make buttons if we have a visible timeline
         if not any_timeline or not self._allow_annotate:
@@ -344,14 +396,14 @@ class GUI:
         for e in sorted(self._allow_annotate):
             self._add_remove_button(True, Action.Annotate_Make, e)
 
-    def set_show_annotation_label(self, show_label: bool, window_id:int = None):
+    def set_show_annotation_label(self, show_label: bool, window_id: int = None):
         self._timeline_show_annotation_labels = show_label
         if window_id is None:
             window_id = self._get_main_window_id()
         if self._window_timeline[window_id] is not None:
             self._window_timeline[window_id].set_show_annotation_labels(show_label)
 
-    def set_show_annotation_info_on_hover(self, show_info: bool, window_id:int = None):
+    def set_show_annotation_info_on_hover(self, show_info: bool, window_id: int = None):
         self._timeline_show_info_on_hover = show_info
         if window_id is None:
             window_id = self._get_main_window_id()
@@ -363,10 +415,10 @@ class GUI:
 
     def start(self):
         if not self._windows:
-            raise RuntimeError('add a window (GUI.add_window) before you call start')
+            raise RuntimeError("add a window (GUI.add_window) before you call start")
         if self._use_thread:
             if self._thread is not None:
-                raise RuntimeError('The gui is already running, cannot start again')
+                raise RuntimeError("The gui is already running, cannot start again")
             self._thread = threading.Thread(target=self._thread_start_fun)
             self._thread.start()
         else:
@@ -375,10 +427,10 @@ class GUI:
     def is_running(self) -> bool:
         return self._running
 
-    def set_window_title(self, new_title: str, window_id:int = None):
+    def set_window_title(self, new_title: str, window_id: int = None):
         if window_id is None:
             window_id = self._get_main_window_id()
-        if self.is_running() and window_id==0:  # main window
+        if self.is_running() and window_id == 0:  # main window
             # this is just for show, doesn't trigger an update. But lets keep them in sync
             hello_imgui.get_runner_params().app_window_params.window_title = new_title
             # actually update window title
@@ -398,20 +450,20 @@ class GUI:
             self._thread.join()
         self._thread = None
 
-    def set_frame_size(self, frame_size: tuple[int,int], window_id:int = None):
+    def set_frame_size(self, frame_size: tuple[int, int], window_id: int = None):
         if window_id is None:
             window_id = self._get_main_window_id()
 
-        self._window_determine_size[window_id] = any([x!=y for x,y in zip(self._frame_size[window_id],frame_size)])
+        self._window_determine_size[window_id] = any([x != y for x, y in zip(self._frame_size[window_id], frame_size)])
         self._frame_size[window_id] = frame_size
 
-    def update_image(self, frame: np.ndarray, pts: float, frame_nr: int, window_id:int = None):
+    def update_image(self, frame: np.ndarray, pts: float, frame_nr: int, window_id: int = None):
         # since this has an independently running loop,
         # need to update image whenever new one available
         if window_id is None:
             window_id = self._get_main_window_id()
         with self._new_frame_lock:
-            self._new_frame[window_id] = (frame, pts, frame_nr) # just copy ref to frame is enough
+            self._new_frame[window_id] = (frame, pts, frame_nr)  # just copy ref to frame is enough
 
     def notify_annotations_changed(self):
         for w in self._windows:
@@ -422,19 +474,21 @@ class GUI:
         # NB: actually the main window id is always 0, but i want to have a defensive check here
         # so that user doesn't make a mistake not specifying what window they apply an operation
         # to when there is more than one window
-        if len(self._windows)>1:
-            raise RuntimeError("You have more than one window, you must indicate for which window you are making this call for")
+        if len(self._windows) > 1:
+            raise RuntimeError(
+                "You have more than one window, you must indicate for which window you are making this call for"
+            )
         return GUI.main_window_id
 
     def _thread_start_fun(self):
-        self._lastT=0.
+        self._lastT = 0.0
         self._should_exit = False
 
         def close_callback(window: glfw._GLFWwindow):
             if self._detachable:
-                self._requests.append(('close',True))
+                self._requests.append(("close", True))
             elif self._interruptible:
-                self._requests.append(('exit',True))
+                self._requests.append(("exit", True))
             else:
                 glfw.set_window_should_close(window, False)
 
@@ -448,7 +502,7 @@ class GUI:
             glfw.set_window_close_callback(glfw_utils.glfw_window_hello_imgui(), close_callback)
 
         def setup_style():
-            imgui.get_style().window_padding = imgui.ImVec2(0,0)
+            imgui.get_style().window_padding = imgui.ImVec2(0, 0)
 
         params = hello_imgui.RunnerParams()
         params.app_window_params.restore_previous_geometry = False
@@ -457,7 +511,7 @@ class GUI:
         params.app_window_params.hidden = True
         params.fps_idling.fps_idle = 0
         params.callbacks.default_icon_font = hello_imgui.DefaultIconFont.font_awesome6
-        params.callbacks.show_gui  = self._gui_func
+        params.callbacks.show_gui = self._gui_func
         params.callbacks.post_init = post_init
         params.callbacks.setup_imgui_style = setup_style
 
@@ -497,16 +551,28 @@ class GUI:
                         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_BORDER)
                         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_BORDER)
                         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
-                        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGB, self._new_frame[w][0].shape[1], self._new_frame[w][0].shape[0], 0, gl.GL_BGR, gl.GL_UNSIGNED_BYTE, self._new_frame[w][0])
+                        gl.glTexImage2D(
+                            gl.GL_TEXTURE_2D,
+                            0,
+                            gl.GL_RGB,
+                            self._new_frame[w][0].shape[1],
+                            self._new_frame[w][0].shape[0],
+                            0,
+                            gl.GL_BGR,
+                            gl.GL_UNSIGNED_BYTE,
+                            self._new_frame[w][0],
+                        )
 
                         # if first time we're showing something (we have a new frame but not yet a current frame)
                         self._frame_size[w] = self._new_frame[w][0].shape
 
-                    if self._new_frame[w][2]!=-1:
-                        if self._not_shown_yet[w] and self._frame_size[w][0]!=-1:   # need to have a known framesize to be able to start showing the window
+                    if self._new_frame[w][2] != -1:
+                        if (
+                            self._not_shown_yet[w] and self._frame_size[w][0] != -1
+                        ):  # need to have a known framesize to be able to start showing the window
                             # tell window to resize
                             self._window_determine_size[w] = True
-                            if w==0:
+                            if w == 0:
                                 # and show window if needed
                                 if not self._window_visible[w]:
                                     hello_imgui.get_runner_params().app_window_params.hidden = False
@@ -515,11 +581,13 @@ class GUI:
                             self._not_shown_yet[w] = False
                         elif self._new_frame[w][0] is not None:
                             # detect when frame changed size
-                            self._window_determine_size[w] = any([x!=y for x,y in zip(self._frame_size[w],self._new_frame[w][0].shape)])
+                            self._window_determine_size[w] = any([
+                                x != y for x, y in zip(self._frame_size[w], self._new_frame[w][0].shape)
+                            ])
 
                         # keep record of what we're showing
-                        self._current_frame[w]  = self._new_frame[w]
-                        self._new_frame[w]      = (None, None, -1)
+                        self._current_frame[w] = self._new_frame[w]
+                        self._new_frame[w] = (None, None, -1)
 
                         # inform timeline GUI of new frame's timestamp
                         if self._window_timeline[w] is not None:
@@ -528,41 +596,49 @@ class GUI:
             # show windows
             for w in self._windows.keys():
                 if self._window_visible[w]:
-                    self._draw_gui(w, w>0)
+                    self._draw_gui(w, w > 0)
 
     def _draw_gui(self, w, need_begin_end):
-        if self._current_frame[w][2]==-1 or self._frame_size[w]==-1:
+        if self._current_frame[w][2] == -1 or self._frame_size[w] == -1:
             return
 
         # determine window size if needed
         dpi_fac = hello_imgui.dpi_window_size_factor()
-        img_sz_pix = np.array([self._frame_size[w][1]*dpi_fac, self._frame_size[w][0]*dpi_fac])
+        img_sz_pix = np.array([self._frame_size[w][1] * dpi_fac, self._frame_size[w][0] * dpi_fac])
         tl_total_height = tl_initial_height = tl_min_height = 0
         # calc size of timeline, if any
-        if (tl:=self._window_timeline[w]) is not None:
+        if (tl := self._window_timeline[w]) is not None:
             timeline_fixed_elements_height = tl.get_fixed_elements_height()
             num_tracks = tl.get_num_annotations()
-            track_height = int(self._window_timeline[w].track_height*dpi_fac)
-            tl_total_height = int(timeline_fixed_elements_height + track_height*num_tracks)
-            tl_initial_height = int(timeline_fixed_elements_height + track_height*min(num_tracks,10))  # start showing no more than 10 tracks, otherwise timeline might take too much space on screen at the beginning
-            tl_min_height = int(timeline_fixed_elements_height + track_height*min(num_tracks,1))  # at least one track high, unless there are no tracks
+            track_height = int(self._window_timeline[w].track_height * dpi_fac)
+            tl_total_height = int(timeline_fixed_elements_height + track_height * num_tracks)
+            tl_initial_height = int(
+                timeline_fixed_elements_height + track_height * min(num_tracks, 10)
+            )  # start showing no more than 10 tracks, otherwise timeline might take too much space on screen at the beginning
+            tl_min_height = int(
+                timeline_fixed_elements_height + track_height * min(num_tracks, 1)
+            )  # at least one track high, unless there are no tracks
         if self._window_determine_size[w]:
-            win     = glfw_utils.glfw_window_hello_imgui()
-            w_bounds= gui_utils.get_current_monitor(*glfw.get_window_pos(win))[1]
-            w_bounds= gui_utils.adjust_bounds_for_framesize(w_bounds, glfw.get_window_frame_size(win))
-            w_bounds.size = [w_bounds.size[0], w_bounds.size[1]-tl_initial_height]  # adjust for timeline
-            img_fit = w_bounds.ensure_window_fits_this_monitor(hello_imgui.ScreenBounds(size=[int(x) for x in img_sz_pix]))
-            self._window_sfac[w] = min([x/y for x,y in zip(img_fit.size,img_sz_pix)])
-            img_fit.size = [int(x*self._window_sfac[w]) for x in img_sz_pix]
+            win = glfw_utils.glfw_window_hello_imgui()
+            w_bounds = gui_utils.get_current_monitor(*glfw.get_window_pos(win))[1]
+            w_bounds = gui_utils.adjust_bounds_for_framesize(w_bounds, glfw.get_window_frame_size(win))
+            w_bounds.size = [w_bounds.size[0], w_bounds.size[1] - tl_initial_height]  # adjust for timeline
+            img_fit = w_bounds.ensure_window_fits_this_monitor(
+                hello_imgui.ScreenBounds(size=[int(x) for x in img_sz_pix])
+            )
+            self._window_sfac[w] = min([x / y for x, y in zip(img_fit.size, img_sz_pix)])
+            img_fit.size = [int(x * self._window_sfac[w]) for x in img_sz_pix]
             if not need_begin_end:
-                glfw.set_window_pos (win, *img_fit.position)
-                glfw.set_window_size(win, img_fit.size[0], img_fit.size[1]+tl_initial_height)
+                glfw.set_window_pos(win, *img_fit.position)
+                glfw.set_window_size(win, img_fit.size[0], img_fit.size[1] + tl_initial_height)
 
         if need_begin_end:
             if self._window_determine_size[w]:
                 imgui.set_next_window_pos(img_fit.position)
-                imgui.set_next_window_size([x+y for x,y in zip(img_fit.size,(0, tl_initial_height))])
-            opened, self._window_visible[w] = imgui.begin(self._windows[w], self._window_visible[w], self._window_flags)
+                imgui.set_next_window_size([x + y for x, y in zip(img_fit.size, (0, tl_initial_height))])
+            opened, self._window_visible[w] = imgui.begin(
+                self._windows[w], self._window_visible[w], self._window_flags
+            )
             if not opened:
                 imgui.end()
                 return
@@ -571,19 +647,27 @@ class GUI:
         # draw image
         win_space = imgui.get_content_region_avail()
         item_spacing_backup = imgui.ImVec2(imgui.get_style().item_spacing)  # make copy
-        imgui.push_style_var(imgui.StyleVar_.item_spacing, imgui.ImVec2(0,0))   # ensure no spacing between image and timeline
-        imgui.set_next_window_size_constraints(imgui.ImVec2(-1, win_space.y-tl_total_height), imgui.ImVec2(-1, win_space.y-tl_min_height))
-        imgui.begin_child(f"img_child_{w}", imgui.ImVec2(0, win_space.y-tl_initial_height), imgui.ChildFlags_.resize_y if tl is not None else 0)
+        imgui.push_style_var(
+            imgui.StyleVar_.item_spacing, imgui.ImVec2(0, 0)
+        )  # ensure no spacing between image and timeline
+        imgui.set_next_window_size_constraints(
+            imgui.ImVec2(-1, win_space.y - tl_total_height), imgui.ImVec2(-1, win_space.y - tl_min_height)
+        )
+        imgui.begin_child(
+            f"img_child_{w}",
+            imgui.ImVec2(0, win_space.y - tl_initial_height),
+            imgui.ChildFlags_.resize_y if tl is not None else 0,
+        )
         img_space = imgui.get_content_region_avail()
-        self._window_sfac[w] = min([img_space.x/img_sz_pix[0], img_space.y/img_sz_pix[1]])
-        img_sz = (img_sz_pix * self._window_sfac[w]).astype('int')
-        img_margins = [max((sp-sz)/2,0) for sp,sz in zip(img_space, img_sz)]
+        self._window_sfac[w] = min([img_space.x / img_sz_pix[0], img_space.y / img_sz_pix[1]])
+        img_sz = (img_sz_pix * self._window_sfac[w]).astype("int")
+        img_margins = [max((sp - sz) / 2, 0) for sp, sz in zip(img_space, img_sz)]
         if self._current_frame[w][0] is None:
-            overlay_text = 'No image'
+            overlay_text = "No image"
             text_size = imgui.calc_text_size(overlay_text)
-            offset = [(img_sz[0]-text_size.x)/2, (img_sz[1]-text_size.y)/2]
-            imgui.set_cursor_pos(tuple([i+o for i,o in zip(img_margins, offset)]))
-            imgui.text_colored((1., 0., 0., 1.), overlay_text)
+            offset = [(img_sz[0] - text_size.x) / 2, (img_sz[1] - text_size.y) / 2]
+            imgui.set_cursor_pos(tuple([i + o for i, o in zip(img_margins, offset)]))
+            imgui.text_colored((1.0, 0.0, 0.0, 1.0), overlay_text)
             imgui.set_cursor_pos(img_margins)
             imgui.dummy((*img_sz,))
         else:
@@ -593,35 +677,35 @@ class GUI:
         # prepare for drawing bottom status overlay (timecode etc)
         fr_ts, fr_idx = self._current_frame[w][1:]
         if fr_ts is not None:
-            overlay_text = f'{utils.format_duration(fr_ts,True)} ({fr_ts:.3f}) [{fr_idx}]'
+            overlay_text = f"{utils.format_duration(fr_ts, True)} ({fr_ts:.3f}) [{fr_idx}]"
         else:
-            overlay_text = f'{fr_idx}'
+            overlay_text = f"{fr_idx}"
         if self._window_show_play_percentage[w] and self._last_frame_idx is not None:
-            overlay_text += f' ({fr_idx/self._last_frame_idx*100:.1f}%)'
+            overlay_text += f" ({fr_idx / self._last_frame_idx * 100:.1f}%)"
         txt_sz = imgui.calc_text_size(overlay_text)
         padding = imgui.get_style().frame_padding
-        overlay_size = txt_sz+imgui.ImVec2(padding.x*2, padding.y*2)
+        overlay_size = txt_sz + imgui.ImVec2(padding.x * 2, padding.y * 2)
         match self._window_timecode_pos[w]:
-            case 'l':
+            case "l":
                 overlay_x_pos = img_margins[0]
-            case 'r':
-                overlay_x_pos = img_margins[0]+img_sz[0]-overlay_size.x
-        overlay_cursor_pos = (overlay_x_pos, img_sz[1]+img_margins[1]-overlay_size.y)
+            case "r":
+                overlay_x_pos = img_margins[0] + img_sz[0] - overlay_size.x
+        overlay_cursor_pos = (overlay_x_pos, img_sz[1] + img_margins[1] - overlay_size.y)
 
         # prepare for tooltip
-        txt_sz = imgui.calc_text_size('(?)')
-        tooltip_child_size = txt_sz+imgui.ImVec2(padding.x*2, padding.y*2)
-        if self._window_timecode_pos[w]=='r':
+        txt_sz = imgui.calc_text_size("(?)")
+        tooltip_child_size = txt_sz + imgui.ImVec2(padding.x * 2, padding.y * 2)
+        if self._window_timecode_pos[w] == "r":
             # timecode is on the right, so tooltip goes on the left
             tooltip_x_pos = img_margins[0]
         else:
-            tooltip_x_pos = img_margins[0]+img_sz[0]-tooltip_child_size.x
-        tooltip_cursor_pos = (tooltip_x_pos, img_sz[1]+img_margins[1]-tooltip_child_size.y)
+            tooltip_x_pos = img_margins[0] + img_sz[0] - tooltip_child_size.x
+        tooltip_cursor_pos = (tooltip_x_pos, img_sz[1] + img_margins[1] - tooltip_child_size.y)
 
         # prepare for drawing action buttons (may be invisible, still submit
         # them for shortcut routing)
         # collect buttons in right order
-        buttons: list[Button|None] = []
+        buttons: list[Button | None] = []
         if self._allow_seek:
             buttons.append(self._buttons[Action.Back_Time])
             buttons.append(self._buttons[Action.Back_Frame])
@@ -642,25 +726,36 @@ class GUI:
                 buttons.extend([None, None])
             buttons.append(self._buttons[Action.Annotate_Delete])
             annotation_colors = self._window_timeline[w].get_annotation_colors()
-            annotate_keys, annotate_ivals = intervals.which_interval(self._current_frame[w][2], {k:v for k,v in self._annotations_frame.items() if k in self._allow_annotate})
+            annotate_keys, annotate_ivals = intervals.which_interval(
+                self._current_frame[w][2],
+                {k: v for k, v in self._annotations_frame.items() if k in self._allow_annotate},
+            )
             for e in natsort.natsorted(self._allow_annotate):
                 if e in annotation_colors and e in annotate_keys:
-                    but = dataclasses.replace(self._buttons[(Action.Annotate_Make, e)])
+                    but = dataclasses.replace(self._buttons[Action.Annotate_Make, e])
                     but.color = annotation_colors[e]
                 else:
-                    but = self._buttons[(Action.Annotate_Make, e)]
+                    but = self._buttons[Action.Annotate_Make, e]
                 buttons.append(but)
         # determine space they take up
-        def _get_text_size(b: Button|None):
+
+        def _get_text_size(b: Button | None):
             if b is None:
-                return imgui.calc_text_size('')
-            elif isinstance(b.lbl,tuple):
+                return imgui.calc_text_size("")
+            if isinstance(b.lbl, tuple):
                 return max([imgui.calc_text_size(l) for l in b.lbl], key=lambda x: x.x)
             return imgui.calc_text_size(b.lbl)
+
         text_sizes = [_get_text_size(b) for b in buttons]
-        button_sizes = [imgui.ImVec2([ts.x+2*padding.x, ts.y+2*padding.y]) for ts in text_sizes]
-        total_button_size = functools.reduce(lambda a,b: imgui.ImVec2(a.x+b.x, max(a.y,b.y)), button_sizes) if button_sizes else imgui.ImVec2()
-        total_button_size = imgui.ImVec2(total_button_size.x+(len(buttons)-1)*item_spacing_backup.x, total_button_size.y)
+        button_sizes = [imgui.ImVec2([ts.x + 2 * padding.x, ts.y + 2 * padding.y]) for ts in text_sizes]
+        total_button_size = (
+            functools.reduce(lambda a, b: imgui.ImVec2(a.x + b.x, max(a.y, b.y)), button_sizes)
+            if button_sizes
+            else imgui.ImVec2()
+        )
+        total_button_size = imgui.ImVec2(
+            total_button_size.x + (len(buttons) - 1) * item_spacing_backup.x, total_button_size.y
+        )
 
         # determine if tooltip will be shown
         show_tooltip = buttons and (self._window_show_action_tooltip[w] or not self._window_show_controls[w])
@@ -669,50 +764,60 @@ class GUI:
         if buttons:
             # center buttons in between timecode and tooltip
             # determine amount of space
-            if self._window_timecode_pos[w]=='l':
+            if self._window_timecode_pos[w] == "l":
                 # space between right edge of status overlay and left edge of tooltip
                 left_edge = overlay_x_pos + overlay_size.x
-                right_edge = tooltip_x_pos if show_tooltip else img_margins[0]+img_sz[0]  # if no tooltip, we can use all the way to the right edge of the image
+                right_edge = (
+                    tooltip_x_pos if show_tooltip else img_margins[0] + img_sz[0]
+                )  # if no tooltip, we can use all the way to the right edge of the image
             else:
                 # space between right edge of tooltip and left edge of status overlay
-                left_edge = tooltip_x_pos + tooltip_child_size.x if show_tooltip else img_margins[0]  # if no tooltip, we can use all the way to the left edge of the image
+                left_edge = (
+                    tooltip_x_pos + tooltip_child_size.x if show_tooltip else img_margins[0]
+                )  # if no tooltip, we can use all the way to the left edge of the image
                 right_edge = overlay_x_pos
-            space = right_edge - left_edge - imgui.get_style().item_spacing.x*(2 if show_tooltip else 1)
+            space = right_edge - left_edge - imgui.get_style().item_spacing.x * (2 if show_tooltip else 1)
             # make multiple rows of buttons if needed
             if total_button_size.x > space:
                 # partition buttons in rows
                 rows = []
                 current_row = []
                 current_row_size = imgui.ImVec2()
-                for b,sz in zip(buttons, button_sizes):
+                for b, sz in zip(buttons, button_sizes):
                     if current_row and current_row_size.x + sz.x + item_spacing_backup.x > space:
                         rows.append((current_row, current_row_size))
                         current_row = []
                         current_row_size = imgui.ImVec2()
-                    current_row.append((b,sz))
-                    current_row_size = imgui.ImVec2(current_row_size.x + sz.x + (item_spacing_backup.x if current_row_size.x>0 else 0), max(current_row_size.y, sz.y))
+                    current_row.append((b, sz))
+                    current_row_size = imgui.ImVec2(
+                        current_row_size.x + sz.x + (item_spacing_backup.x if current_row_size.x > 0 else 0),
+                        max(current_row_size.y, sz.y),
+                    )
                 if current_row:
                     rows.append((current_row, current_row_size))
                 max_row_width = max([r[1].x for r in rows])
-                total_height = sum([r[1].y for r in rows]) + item_spacing_backup.y*(len(rows)-1)
+                total_height = sum([r[1].y for r in rows]) + item_spacing_backup.y * (len(rows) - 1)
             else:
-                rows = [([(b,sz) for b,sz in zip(buttons, button_sizes)], total_button_size)]
+                rows = [([(b, sz) for b, sz in zip(buttons, button_sizes)], total_button_size)]
                 max_row_width = total_button_size.x
                 total_height = total_button_size.y
 
             # if we have a single row and enough space to center the buttons on the image, do it
-            button_cursor_pos_x = int(img_margins[0] + (img_sz[0]-total_button_size.x)/2)
-            if len(rows)==1 and button_cursor_pos_x > left_edge+imgui.get_style().item_spacing.x and button_cursor_pos_x + total_button_size.x < right_edge-imgui.get_style().item_spacing.x:
-                button_cursor_pos = (button_cursor_pos_x, img_sz[1]+img_margins[1]-total_height)
+            button_cursor_pos_x = int(img_margins[0] + (img_sz[0] - total_button_size.x) / 2)
+            if (
+                len(rows) == 1
+                and button_cursor_pos_x > left_edge + imgui.get_style().item_spacing.x
+                and button_cursor_pos_x + total_button_size.x < right_edge - imgui.get_style().item_spacing.x
+            ):
+                button_cursor_pos = (button_cursor_pos_x, img_sz[1] + img_margins[1] - total_height)
             else:
                 margin = space - max_row_width
                 if show_tooltip:
                     margin /= 2
-                elif self._window_timecode_pos[w]=='r':
+                elif self._window_timecode_pos[w] == "r":
                     margin = 0  # flush to left of image
-                button_cursor_pos = (int(left_edge + margin), img_sz[1]+img_margins[1]-total_height)
+                button_cursor_pos = (int(left_edge + margin), img_sz[1] + img_margins[1] - total_height)
             buttons_child_size = imgui.ImVec2(max_row_width, total_height)
-
 
         # draw bottom status overlay
         imgui.set_cursor_pos(overlay_cursor_pos)
@@ -722,34 +827,35 @@ class GUI:
         imgui.text(overlay_text)
         imgui.end_child()
 
-
         # draw buttons
         def _draw_action_tooltip():
             imgui.set_cursor_pos(imgui.get_style().frame_padding)
-            imgui.text('(?)')
+            imgui.text("(?)")
             if imgui.is_item_hovered(imgui.HoveredFlags_.for_tooltip | imgui.HoveredFlags_.delay_normal):
-                overlay_text = ''
+                overlay_text = ""
                 for b in buttons:
                     if b is not None and b.key is not None:
-                        overlay_text += f"'{imgui.get_key_name(b.key)}': {b.tooltip if b.tooltip else b.lbl}\n"
+                        overlay_text += f"'{imgui.get_key_name(b.key)}': {b.tooltip or b.lbl}\n"
                 overlay_text = overlay_text[:-1]
                 if self._window_timeline[w] is not None and self._allow_timeline_zoom:
-                    overlay_text += '\nMouse wheel: hover over timeline to zoom'
+                    overlay_text += "\nMouse wheel: hover over timeline to zoom"
                 imgui.set_tooltip(overlay_text)
 
         if buttons:
             if self._window_show_controls[w]:
                 imgui.set_cursor_pos(button_cursor_pos)
-                imgui.begin_child("##controls_overlay", size=buttons_child_size, window_flags=imgui.WindowFlags_.no_scrollbar)
+                imgui.begin_child(
+                    "##controls_overlay", size=buttons_child_size, window_flags=imgui.WindowFlags_.no_scrollbar
+                )
                 imgui.push_style_var(imgui.StyleVar_.item_spacing, item_spacing_backup)
 
             # always "draw" buttons, even if we don't show them, so that shortcuts still work
             for b_row, r_sz in rows:
-                imgui.set_cursor_pos_x(int((buttons_child_size.x-r_sz.x)/2))
-                for i_b, (b,sz) in enumerate(b_row):
+                imgui.set_cursor_pos_x(int((buttons_child_size.x - r_sz.x) / 2))
+                for i_b, (b, sz) in enumerate(b_row):
                     if b is None:
                         imgui.dummy(sz)
-                        if i_b < len(b_row)-1:
+                        if i_b < len(b_row) - 1:
                             imgui.same_line()
                         continue
                     mod_key = 0
@@ -760,24 +866,42 @@ class GUI:
                     if b.repeats:
                         flags |= imgui.InputFlags_.repeat
                     if b.key is not None:
-                        imgui.set_next_item_shortcut(b.key|mod_key, flags=flags)
+                        imgui.set_next_item_shortcut(b.key | mod_key, flags=flags)
                     lbl = b.lbl
-                    if b.action==Action.Pause:
+                    if b.action == Action.Pause:
                         lbl = lbl[1] if self._is_playing else lbl[0]
                     disable = False
-                    if b.action==Action.Annotate_Delete:
-                        disable = not annotate_keys # we are not in an interval
+                    if b.action == Action.Annotate_Delete:
+                        disable = not annotate_keys  # we are not in an interval
                     if disable:
                         imgui.begin_disabled()
                     if self._window_show_controls[w]:
                         if b.color is not None:
-                            but_alphas = [imgui.get_style_color_vec4(b).w for b in [imgui.Col_.button, imgui.Col_.button_hovered, imgui.Col_.button_active]]
-                            imgui.push_style_color(imgui.Col_.button,         timeline.color_replace_alpha(b.color,but_alphas[0]).value)
-                            imgui.push_style_color(imgui.Col_.button_hovered, timeline.color_replace_alpha(timeline.color_brighten(b.color, .15),but_alphas[1]).value)
-                            imgui.push_style_color(imgui.Col_.button_active,  timeline.color_replace_alpha(timeline.color_brighten(b.color, .9 ),but_alphas[2]).value)
+                            but_alphas = [
+                                imgui.get_style_color_vec4(b).w
+                                for b in [imgui.Col_.button, imgui.Col_.button_hovered, imgui.Col_.button_active]
+                            ]
+                            imgui.push_style_color(
+                                imgui.Col_.button, timeline.color_replace_alpha(b.color, but_alphas[0]).value
+                            )
+                            imgui.push_style_color(
+                                imgui.Col_.button_hovered,
+                                timeline.color_replace_alpha(
+                                    timeline.color_brighten(b.color, 0.15), but_alphas[1]
+                                ).value,
+                            )
+                            imgui.push_style_color(
+                                imgui.Col_.button_active,
+                                timeline.color_replace_alpha(
+                                    timeline.color_brighten(b.color, 0.9), but_alphas[2]
+                                ).value,
+                            )
                             text_contrast_ratio = 1 / 1.57
                             text_color = imgui.ImColor(imgui.get_style_color_vec4(imgui.Col_.text))
-                            imgui.push_style_color(imgui.Col_.text,           timeline.color_adjust_contrast(text_color,text_contrast_ratio,b.color).value)
+                            imgui.push_style_color(
+                                imgui.Col_.text,
+                                timeline.color_adjust_contrast(text_color, text_contrast_ratio, b.color).value,
+                            )
                         activated = imgui.button(lbl, size=sz)
                         if b.color is not None:
                             imgui.pop_style_color(4)
@@ -786,40 +910,58 @@ class GUI:
                     if activated:
                         match b.action:
                             case Action.Pause:
-                                self._requests.append(('toggle_pause',None))
+                                self._requests.append(("toggle_pause", None))
                             case Action.Back_Time:
-                                self._requests.append(('delta_time', -10. if imgui.is_key_down(imgui.Key.mod_shift) else -1.))
+                                self._requests.append((
+                                    "delta_time",
+                                    -10.0 if imgui.is_key_down(imgui.Key.mod_shift) else -1.0,
+                                ))
                             case Action.Back_Frame:
-                                self._requests.append(('delta_frame', -10 if imgui.is_key_down(imgui.Key.mod_shift) else -1))
+                                self._requests.append((
+                                    "delta_frame",
+                                    -10 if imgui.is_key_down(imgui.Key.mod_shift) else -1,
+                                ))
                             case Action.Forward_Frame:
-                                self._requests.append(('delta_frame',  10 if imgui.is_key_down(imgui.Key.mod_shift) else  1))
+                                self._requests.append((
+                                    "delta_frame",
+                                    10 if imgui.is_key_down(imgui.Key.mod_shift) else 1,
+                                ))
                             case Action.Forward_Time:
-                                self._requests.append(('delta_time',  10. if imgui.is_key_down(imgui.Key.mod_shift) else  1.))
+                                self._requests.append((
+                                    "delta_time",
+                                    10.0 if imgui.is_key_down(imgui.Key.mod_shift) else 1.0,
+                                ))
                             case Action.Close:
-                                self._requests.append(('close',None))
+                                self._requests.append(("close", None))
                             case Action.Quit:
-                                self._requests.append(('exit',None))
+                                self._requests.append(("exit", None))
                             case Action.Annotate_Make:
-                                self._requests.append(('add_coding',(b.event, self._current_frame[w][2])))
+                                self._requests.append(("add_coding", (b.event, self._current_frame[w][2])))
                             case Action.Annotate_Delete:
-                                for k,iv in zip(annotate_keys,annotate_ivals):
-                                    if len(iv)>1 and self._current_frame[w][2] in iv:
+                                for k, iv in zip(annotate_keys, annotate_ivals):
+                                    if len(iv) > 1 and self._current_frame[w][2] in iv:
                                         # on the edge of an episode, return only the edge so we don't delete the whole episode
-                                        self._requests.append(('delete_coding',(k,[self._current_frame[w][2]])))
+                                        self._requests.append(("delete_coding", (k, [self._current_frame[w][2]])))
                                     else:
-                                        self._requests.append(('delete_coding',(k,iv)))
-                    if self._window_show_controls[w] and imgui.is_item_hovered(imgui.HoveredFlags_.for_tooltip | imgui.HoveredFlags_.delay_normal) and b.full_tooltip:
+                                        self._requests.append(("delete_coding", (k, iv)))
+                    if (
+                        self._window_show_controls[w]
+                        and imgui.is_item_hovered(imgui.HoveredFlags_.for_tooltip | imgui.HoveredFlags_.delay_normal)
+                        and b.full_tooltip
+                    ):
                         imgui.set_tooltip(b.full_tooltip)
                     if disable:
                         imgui.end_disabled()
-                    if i_b < len(b_row)-1:
+                    if i_b < len(b_row) - 1:
                         imgui.same_line()
             if self._window_show_controls[w]:
                 imgui.pop_style_var()
                 imgui.end_child()
             if self._window_show_action_tooltip[w] or not self._window_show_controls[w]:
                 imgui.set_cursor_pos(tooltip_cursor_pos)
-                imgui.begin_child("##tooltip_overlay", size=tooltip_child_size, window_flags=imgui.WindowFlags_.no_scrollbar)
+                imgui.begin_child(
+                    "##tooltip_overlay", size=tooltip_child_size, window_flags=imgui.WindowFlags_.no_scrollbar
+                )
                 _draw_action_tooltip()
                 imgui.end_child()
         imgui.pop_style_color()
@@ -827,7 +969,7 @@ class GUI:
 
         # draw timeline, if any
         if self._window_timeline[w] is not None:
-            imgui.begin_child(f"timeline_child_{w}", imgui.ImVec2(win_space.x, win_space.y-img_space.y))
+            imgui.begin_child(f"timeline_child_{w}", imgui.ImVec2(win_space.x, win_space.y - img_space.y))
             self._window_timeline[w].draw()
             self._requests.extend(self._window_timeline[w].get_requests())
             imgui.end_child()

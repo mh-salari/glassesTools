@@ -5,23 +5,32 @@ from . import video_player
 
 
 def show_visualization(
-        in_video: str|pathlib.Path, frame_timestamp_file: str|pathlib.Path, camera_calibration_file: str|pathlib.Path,
-        planes: dict[str, plane.Plane], poses: dict[str, dict[int, pose.Pose]],
-        head_gazes: dict[int, list[gaze_headref.Gaze]], plane_gazes: dict[str, dict[int, list[gaze_worldref.Gaze]]],
-        annotations: dict[str, tuple[annotation.EventType, list[list[int]]]],
-        gui: video_player.GUI, show_planes: bool, show_only_intervals: bool, sub_pixel_fac: int
-    ):
-    in_video                = pathlib.Path(in_video)
-    frame_timestamp_file    = pathlib.Path(frame_timestamp_file)
+    in_video: str | pathlib.Path,
+    frame_timestamp_file: str | pathlib.Path,
+    camera_calibration_file: str | pathlib.Path,
+    planes: dict[str, plane.Plane],
+    poses: dict[str, dict[int, pose.Pose]],
+    head_gazes: dict[int, list[gaze_headref.Gaze]],
+    plane_gazes: dict[str, dict[int, list[gaze_worldref.Gaze]]],
+    annotations: dict[str, tuple[annotation.EventType, list[list[int]]]],
+    gui: video_player.GUI,
+    show_planes: bool,
+    show_only_intervals: bool,
+    sub_pixel_fac: int,
+):
+    in_video = pathlib.Path(in_video)
+    frame_timestamp_file = pathlib.Path(frame_timestamp_file)
     camera_calibration_file = pathlib.Path(camera_calibration_file)
 
     # prep visualizations
     # open video
-    video_ts        = timestamps.VideoTimestamps(frame_timestamp_file)
-    cap             = ocv.CV2VideoReader(in_video, video_ts.timestamps)
-    cam_params      = ocv.CameraParams.read_from_file(camera_calibration_file)
+    video_ts = timestamps.VideoTimestamps(frame_timestamp_file)
+    cap = ocv.CV2VideoReader(in_video, video_ts.timestamps)
+    cam_params = ocv.CameraParams.read_from_file(camera_calibration_file)
 
-    gui.set_show_timeline(True, video_ts, annotation.flatten_annotation_dict(annotations), window_id=gui.main_window_id)
+    gui.set_show_timeline(
+        True, video_ts, annotation.flatten_annotation_dict(annotations), window_id=gui.main_window_id
+    )
 
     # add windows for planes, if wanted
     if show_planes:
@@ -30,7 +39,7 @@ def show_visualization(
     max_frame_idx = max(head_gazes.keys())
     should_exit = False
     first_frame = True
-    for frame_idx in range(max_frame_idx+1):
+    for frame_idx in range(max_frame_idx + 1):
         done, frame, frame_idx, frame_ts = cap.read_frame(report_gap=True)
         if first_frame and frame is not None:
             gui.set_frame_size(frame.shape, gui.main_window_id)
@@ -39,8 +48,8 @@ def show_visualization(
             break
 
         requests = gui.get_requests()
-        for r,p in requests:
-            if r=='exit':   # only request we need to handle
+        for r, p in requests:
+            if r == "exit":  # only request we need to handle
                 should_exit = True
                 break
         if should_exit:
@@ -50,13 +59,15 @@ def show_visualization(
         # NB: have to spool through like this, setting specific frame to read
         # with cap.get(cv2.CAP_PROP_POS_FRAMES) doesn't seem to work reliably
         # for VFR video files
-        if show_only_intervals and not any(intervals.is_in_interval(frame_idx, annotations[e]) for e in annotations) or frame is None:
+        if (
+            show_only_intervals and not any(intervals.is_in_interval(frame_idx, annotations[e]) for e in annotations)
+        ) or frame is None:
             # we don't have a valid frame or no need to show this frame
             # do update timeline of the viewers
-            gui.update_image(None, frame_ts/1000., frame_idx, window_id=gui.main_window_id)
+            gui.update_image(None, frame_ts / 1000.0, frame_idx, window_id=gui.main_window_id)
             if show_planes:
                 for p in planes:
-                    gui.update_image(None, frame_ts/1000., frame_idx, window_id=plane_win_id[p])
+                    gui.update_image(None, frame_ts / 1000.0, frame_idx, window_id=plane_win_id[p])
             continue
 
         if show_planes:
@@ -71,23 +82,28 @@ def show_visualization(
         for p in planes:
             if frame_idx in plane_gazes[p]:
                 for gaze_world in plane_gazes[p][frame_idx]:
-                    gaze_world.draw_on_world_video(frame, cam_params, sub_pixel_fac, None if not p in poses or not frame_idx in poses[p] else poses[p][frame_idx])
+                    gaze_world.draw_on_world_video(
+                        frame,
+                        cam_params,
+                        sub_pixel_fac,
+                        None if p not in poses or frame_idx not in poses[p] else poses[p][frame_idx],
+                    )
                     if show_planes:
                         gaze_world.draw_on_plane(ref_img[p], planes[p], sub_pixel_fac)
 
         if show_planes:
             for p in planes:
-                gui.update_image(ref_img[p], frame_ts/1000., frame_idx, window_id=plane_win_id[p])
+                gui.update_image(ref_img[p], frame_ts / 1000.0, frame_idx, window_id=plane_win_id[p])
 
         # if we have plane pose, draw plane origin on video
         for p in planes:
             if frame_idx in poses[p]:
                 a = poses[p][frame_idx].get_origin_on_image(cam_params)
-                drawing.openCVCircle(frame, a, 3, (0,255,0), -1, sub_pixel_fac)
+                drawing.openCVCircle(frame, a, 3, (0, 255, 0), -1, sub_pixel_fac)
                 ll = 20
-                drawing.openCVLine(frame, (a[0],a[1]-ll), (a[0],a[1]+ll), (0,255,0), 1, sub_pixel_fac)
-                drawing.openCVLine(frame, (a[0]-ll,a[1]), (a[0]+ll,a[1]), (0,255,0), 1, sub_pixel_fac)
+                drawing.openCVLine(frame, (a[0], a[1] - ll), (a[0], a[1] + ll), (0, 255, 0), 1, sub_pixel_fac)
+                drawing.openCVLine(frame, (a[0] - ll, a[1]), (a[0] + ll, a[1]), (0, 255, 0), 1, sub_pixel_fac)
 
-        gui.update_image(frame, frame_ts/1000., frame_idx, window_id=gui.main_window_id)
+        gui.update_image(frame, frame_ts / 1000.0, frame_idx, window_id=gui.main_window_id)
 
     gui.stop()

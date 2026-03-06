@@ -1,18 +1,29 @@
-from typing import Callable
+from collections.abc import Callable
 from enum import Enum, auto
-from imgui_bundle import hello_imgui, imgui, icons_fontawesome_6 as ifa6
+
+from imgui_bundle import hello_imgui, imgui
+from imgui_bundle import icons_fontawesome_6 as ifa6
 
 from . import utils
 
 icon_font_size_multiplier = 4.2
 
-class MsgBox(Enum):
-    question= auto()
-    info    = auto()
-    warn    = auto()
-    error   = auto()
 
-def msgbox(title: str, msg: str, type: MsgBox=None, buttons: dict[str, Callable]='default', button_keymap: dict[int,imgui.Key]=None, more: str=None):
+class MsgBox(Enum):
+    question = auto()
+    info = auto()
+    warn = auto()
+    error = auto()
+
+
+def msgbox(
+    title: str,
+    msg: str,
+    type: MsgBox = None,
+    buttons: dict[str, Callable] = "default",
+    button_keymap: dict[int, imgui.Key] = None,
+    more: str = None,
+):
     def popup_content():
         spacing = 2 * imgui.get_style().item_spacing.x
         if type is MsgBox.question:
@@ -30,9 +41,9 @@ def msgbox(title: str, msg: str, type: MsgBox=None, buttons: dict[str, Callable]
         else:
             icon = None
         if icon:
-            imgui.push_font(None, imgui.get_style().font_size_base*icon_font_size_multiplier)
+            imgui.push_font(None, imgui.get_style().font_size_base * icon_font_size_multiplier)
             icon_size = imgui.calc_text_size(icon)
-            imgui.text_colored((*color,1.),icon)
+            imgui.text_colored((*color, 1.0), icon)
             imgui.pop_font()
             imgui.same_line(spacing=spacing)
         imgui.begin_group()
@@ -47,16 +58,19 @@ def msgbox(title: str, msg: str, type: MsgBox=None, buttons: dict[str, Callable]
             if imgui.tree_node_ex("More info", flags=imgui.TreeNodeFlags_.span_avail_width):
                 size = imgui.get_io().display_size
                 more_size = imgui.calc_text_size(more)
-                _26 = hello_imgui.dpi_window_size_factor()*26 + imgui.get_style().scrollbar_size
+                _26 = hello_imgui.dpi_window_size_factor() * 26 + imgui.get_style().scrollbar_size
                 width = min(more_size.x + _26, size.x * 0.8 - icon_size.x)
                 height = min(more_size.y + _26, size.y * 0.7 - msg_size_y)
-                imgui.input_text_multiline(f"###more_info_{title}", more, (width, height), flags=imgui.InputTextFlags_.read_only)
+                imgui.input_text_multiline(
+                    f"###more_info_{title}", more, (width, height), flags=imgui.InputTextFlags_.read_only
+                )
                 imgui.tree_pop()
         imgui.end_group()
-    if buttons=='default':
+
+    if buttons == "default":
         # special case
-        buttons = {
-            ifa6.ICON_FA_CHECK + " Ok": None
-        }
-        button_keymap = {0:imgui.Key.enter}
-    return utils.popup(title, popup_content, buttons, button_keymap=button_keymap, closable=False, escape=True, outside=False)
+        buttons = {ifa6.ICON_FA_CHECK + " Ok": None}
+        button_keymap = {0: imgui.Key.enter}
+    return utils.popup(
+        title, popup_content, buttons, button_keymap=button_keymap, closable=False, escape=True, outside=False
+    )

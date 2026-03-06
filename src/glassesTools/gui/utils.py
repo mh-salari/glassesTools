@@ -1,13 +1,17 @@
-import random
 import functools
+import random
+import string
 import sys
 import traceback
-from typing import Any, Callable
-from imgui_bundle import imgui, imspinner, hello_imgui, icons_fontawesome_6 as ifa6
-import glfw
+from collections.abc import Callable
+from typing import Any
 
-from . import colors, msg_box
+import glfw
+from imgui_bundle import hello_imgui, imgui, imspinner
+from imgui_bundle import icons_fontawesome_6 as ifa6
+
 from .. import platform, process_pool, utils
+from . import colors, msg_box
 
 
 # https://gist.github.com/Willy-JL/f733c960c6b0d2284bcbee0316f88878
@@ -25,7 +29,15 @@ def draw_tooltip(hover_text):
     imgui.pop_text_wrap_pos()
     imgui.end_tooltip()
 
-def draw_hover_text(hover_text: str, text="(?)", force=False, hovered_flags=imgui.HoveredFlags_.for_tooltip|imgui.HoveredFlags_.delay_normal, *args, **kwargs):
+
+def draw_hover_text(
+    hover_text: str,
+    text="(?)",
+    force=False,
+    hovered_flags=imgui.HoveredFlags_.for_tooltip | imgui.HoveredFlags_.delay_normal,
+    *args,
+    **kwargs,
+):
     if text:
         imgui.text_disabled(text, *args, **kwargs)
     if force or imgui.is_item_hovered(hovered_flags):
@@ -34,40 +46,52 @@ def draw_hover_text(hover_text: str, text="(?)", force=False, hovered_flags=imgu
     return False
 
 
-def draw_process_state(state: process_pool.State, have_hover_popup=True, progress: tuple[float,str]=None):
+def draw_process_state(state: process_pool.State, have_hover_popup=True, progress: tuple[float, str] = None):
     symbol_size = imgui.calc_text_size(ifa6.ICON_FA_CIRCLE)
     match state:
         case process_pool.State.Not_Run:
             imgui.text_colored(colors.gray, ifa6.ICON_FA_CIRCLE)
-            hover_text = 'Not run'
+            hover_text = "Not run"
         case process_pool.State.Pending:
-            radius    = symbol_size.x / 2
-            thickness = symbol_size.x / 3 / 2.5 # 3 is number of dots, 2.5 is nextItemKoeff in imspinner.spinner_bounce_dots()
-            imspinner.spinner_bounce_dots(f'waitBounceDots', radius, thickness, color=imgui.get_style_color_vec4(imgui.Col_.text))
-            hover_text = 'Pending'
+            radius = symbol_size.x / 2
+            thickness = (
+                symbol_size.x / 3 / 2.5
+            )  # 3 is number of dots, 2.5 is nextItemKoeff in imspinner.spinner_bounce_dots()
+            imspinner.spinner_bounce_dots(
+                "waitBounceDots", radius, thickness, color=imgui.get_style_color_vec4(imgui.Col_.text)
+            )
+            hover_text = "Pending"
         case process_pool.State.Running:
             if progress is not None:
-                imgui.text(f'{progress[0]:.0f}%')
+                imgui.text(f"{progress[0]:.0f}%")
             else:
-                spinner_radii = [x/22/2*symbol_size.x for x in [22, 16, 10]]
-                lw = 3.5/22/2*symbol_size.x
-                imspinner.spinner_ang_triple(f'runSpinner', *spinner_radii, lw, c1=imgui.get_style_color_vec4(imgui.Col_.text), c2=colors.warning, c3=imgui.get_style_color_vec4(imgui.Col_.text))
-            hover_text = 'Running'+(f' ({progress[1]})' if progress is not None else '')
+                spinner_radii = [x / 22 / 2 * symbol_size.x for x in [22, 16, 10]]
+                lw = 3.5 / 22 / 2 * symbol_size.x
+                imspinner.spinner_ang_triple(
+                    "runSpinner",
+                    *spinner_radii,
+                    lw,
+                    c1=imgui.get_style_color_vec4(imgui.Col_.text),
+                    c2=colors.warning,
+                    c3=imgui.get_style_color_vec4(imgui.Col_.text),
+                )
+            hover_text = "Running" + (f" ({progress[1]})" if progress is not None else "")
         case process_pool.State.Completed:
             imgui.text_colored(colors.ok, ifa6.ICON_FA_CIRCLE_CHECK)
-            hover_text = 'Completed'
+            hover_text = "Completed"
         case process_pool.State.Canceled:
             imgui.text_colored(colors.warning, ifa6.ICON_FA_HAND)
-            hover_text = 'Canceled'
+            hover_text = "Canceled"
         case process_pool.State.Failed:
             imgui.text_colored(colors.error_bright, ifa6.ICON_FA_TRIANGLE_EXCLAMATION)
-            hover_text = 'Failed'
+            hover_text = "Failed"
     if have_hover_popup:
-        draw_hover_text(hover_text, text='')
+        draw_hover_text(hover_text, text="")
 
 
 def rand_num_str(len=8):
-    return "".join((random.choice('0123456789') for _ in range(len)))
+    return "".join(random.choice(string.digits) for _ in range(len))
+
 
 def push_popup(gui, *args, bottom=False, **kwargs):
     if len(args) + len(kwargs) > 1:
@@ -83,11 +107,13 @@ def push_popup(gui, *args, bottom=False, **kwargs):
         gui.popup_stack.append(popup_func)
     return popup_func
 
+
 def fix_popup_transparency():
     frame_bg_col = imgui.get_style().color_(imgui.Col_.title_bg_active)
-    imgui.get_style().set_color_(imgui.Col_.title_bg_active,(frame_bg_col.x, frame_bg_col.y, frame_bg_col.z, 1.))
+    imgui.get_style().set_color_(imgui.Col_.title_bg_active, (frame_bg_col.x, frame_bg_col.y, frame_bg_col.z, 1.0))
     popup_bg_col = imgui.get_style().color_(imgui.Col_.popup_bg)
-    imgui.get_style().set_color_(imgui.Col_.popup_bg,(popup_bg_col.x, popup_bg_col.y, popup_bg_col.z, 1.))
+    imgui.get_style().set_color_(imgui.Col_.popup_bg, (popup_bg_col.x, popup_bg_col.y, popup_bg_col.z, 1.0))
+
 
 def handle_popup_stack(popup_stack: list):
     fix_popup_transparency()
@@ -105,6 +131,7 @@ def handle_popup_stack(popup_stack: list):
     for _ in range(open_popup_count):
         imgui.end_popup()
 
+
 def close_weak_popup(check_escape: bool = True, check_click_outside: bool = True):
     if not imgui.is_popup_open("", imgui.PopupFlags_.any_popup_id):
         # This is the topmost popup
@@ -112,23 +139,31 @@ def close_weak_popup(check_escape: bool = True, check_click_outside: bool = True
             # Escape is pressed
             imgui.close_current_popup()
             return True
-        elif check_click_outside and imgui.is_mouse_clicked(imgui.MouseButton_.left):
+        if check_click_outside and imgui.is_mouse_clicked(imgui.MouseButton_.left):
             # Mouse was just clicked
             pos = imgui.get_window_pos()
             size = imgui.get_window_size()
-            if not imgui.is_mouse_hovering_rect(pos, (pos.x+size.x, pos.y+size.y), clip=False):
+            if not imgui.is_mouse_hovering_rect(pos, (pos.x + size.x, pos.y + size.y), clip=False):
                 # Popup is not hovered
                 imgui.close_current_popup()
                 return True
     return False
 
+
 popup_flags: int = (
-    imgui.WindowFlags_.no_collapse |
-    imgui.WindowFlags_.no_saved_settings |
-    imgui.WindowFlags_.always_auto_resize
+    imgui.WindowFlags_.no_collapse | imgui.WindowFlags_.no_saved_settings | imgui.WindowFlags_.always_auto_resize
 )
 
-def popup(label: str, popup_content: Callable, buttons: dict[str, Callable]|None=None, button_keymap: dict[int,imgui.Key]=None, closable=True, escape=True, outside=True):
+
+def popup(
+    label: str,
+    popup_content: Callable,
+    buttons: dict[str, Callable] | None = None,
+    button_keymap: dict[int, imgui.Key] = None,
+    closable=True,
+    escape=True,
+    outside=True,
+):
     if not imgui.is_popup_open(label):
         imgui.open_popup(label)
     closed = False
@@ -141,15 +176,19 @@ def popup(label: str, popup_content: Callable, buttons: dict[str, Callable]|None
         imgui.end_group()
         imgui.spacing()
         if buttons:
-            btns_width = sum(imgui.calc_text_size(name).x for name in buttons) + (2 * len(buttons) * imgui.get_style().frame_padding.x) + (imgui.get_style().item_spacing.x * (len(buttons) - 1))
+            btns_width = (
+                sum(imgui.calc_text_size(name).x for name in buttons)
+                + (2 * len(buttons) * imgui.get_style().frame_padding.x)
+                + (imgui.get_style().item_spacing.x * (len(buttons) - 1))
+            )
             cur_pos_x = imgui.get_cursor_pos_x()
             new_pos_x = cur_pos_x + imgui.get_content_region_avail().x - btns_width
             if new_pos_x > cur_pos_x:
                 imgui.set_cursor_pos_x(new_pos_x)
-            for i, (label,callbacks) in enumerate(buttons.items()):
-                if isinstance(callbacks,tuple):
+            for i, (label, callbacks) in enumerate(buttons.items()):
+                if isinstance(callbacks, tuple):
                     callback = callbacks[0]
-                    disabled = len(callbacks)>1 and callbacks[1]()
+                    disabled = len(callbacks) > 1 and callbacks[1]()
                 else:
                     callback = callbacks
                     disabled = False
@@ -171,15 +210,26 @@ def popup(label: str, popup_content: Callable, buttons: dict[str, Callable]|None
     return opened, closed
 
 
-def selectable_item_logic(iid: int|str, selected: dict[int,Any], last_clicked_id: int, sorted_ids: list[int],
-                          selectable_clicked: bool, new_selectable_state: bool,
-                          allow_multiple=True, overlayed_hovered=False, overlayed_clicked=False, new_overlayed_state=False):
+def selectable_item_logic(
+    iid: int | str,
+    selected: dict[int, Any],
+    last_clicked_id: int,
+    sorted_ids: list[int],
+    selectable_clicked: bool,
+    new_selectable_state: bool,
+    allow_multiple=True,
+    overlayed_hovered=False,
+    overlayed_clicked=False,
+    new_overlayed_state=False,
+):
     if overlayed_clicked:
         if not allow_multiple:
             utils.set_all(selected, False)
         selected[iid] = new_overlayed_state
         last_clicked_id = iid
-    elif selectable_clicked and not overlayed_hovered: # don't enter this branch if interaction is with another overlaid actionable item
+    elif (
+        selectable_clicked and not overlayed_hovered
+    ):  # don't enter this branch if interaction is with another overlaid actionable item
         if not allow_multiple:
             utils.set_all(selected, False)
             selected[iid] = new_selectable_state
@@ -191,13 +241,13 @@ def selectable_item_logic(iid: int|str, selected: dict[int,Any], last_clicked_id
 
             if imgui.get_io().key_shift:
                 # select range between last clicked and just clicked item
-                idx              = sorted_ids.index(iid)
+                idx = sorted_ids.index(iid)
                 last_clicked_idx = sorted_ids.index(last_clicked_id)
                 idxs = sorted([idx, last_clicked_idx])
-                for rid in range(idxs[0],idxs[1]+1):
+                for rid in range(idxs[0], idxs[1] + 1):
                     selected[sorted_ids[rid]] = True
             else:
-                selected[iid] = True if num_selected>1 and not imgui.get_io().key_ctrl else new_selectable_state
+                selected[iid] = True if num_selected > 1 and not imgui.get_io().key_ctrl else new_selectable_state
 
             # consistent with Windows behavior, only update last clicked when shift not pressed
             if not imgui.get_io().key_shift:
@@ -205,7 +255,10 @@ def selectable_item_logic(iid: int|str, selected: dict[int,Any], last_clicked_id
 
     return last_clicked_id
 
-def handle_item_hitbox_events(iid: int, selected: dict[int,bool], context_menu: Callable[[int],bool]) -> tuple[bool,bool]:
+
+def handle_item_hitbox_events(
+    iid: int, selected: dict[int, bool], context_menu: Callable[[int], bool]
+) -> tuple[bool, bool]:
     right_clicked = False
     selectables_edited = False
     # Right click = context menu
@@ -229,20 +282,22 @@ def handle_item_hitbox_events(iid: int, selected: dict[int,bool], context_menu: 
     return right_clicked, selectables_edited
 
 
-def my_checkbox(label: str, state: bool, frame_size: tuple=None, frame_padding_override: list=None, do_vertical_align=True):
+def my_checkbox(
+    label: str, state: bool, frame_size: tuple = None, frame_padding_override: list = None, do_vertical_align=True
+):
     style = imgui.get_style()
     if state:
         imgui.push_style_color(imgui.Col_.frame_bg_hovered, style.color_(imgui.Col_.button_hovered))
         imgui.push_style_color(imgui.Col_.frame_bg, style.color_(imgui.Col_.button_hovered))
         imgui.push_style_color(imgui.Col_.check_mark, style.color_(imgui.Col_.text))
     if frame_size is not None:
-        frame_padding = frame_padding_override if frame_padding_override else [style.frame_padding.x, style.frame_padding.y]
+        frame_padding = frame_padding_override or [style.frame_padding.x, style.frame_padding.y]
         imgui.push_style_var(imgui.StyleVar_.frame_padding, frame_size)
-        imgui.push_style_var(imgui.StyleVar_.item_spacing, (0.,0.))
+        imgui.push_style_var(imgui.StyleVar_.item_spacing, (0.0, 0.0))
         imgui.begin_group()
         if do_vertical_align and frame_padding[1]:
-            imgui.dummy((0,frame_padding[1]))
-        imgui.dummy((frame_padding[0],0))
+            imgui.dummy((0, frame_padding[1]))
+        imgui.dummy((frame_padding[0], 0))
         imgui.same_line()
     result = imgui.checkbox(label, state)
     if frame_size is not None:
@@ -252,21 +307,33 @@ def my_checkbox(label: str, state: bool, frame_size: tuple=None, frame_padding_o
         imgui.pop_style_color(3)
     return result
 
+
 def my_combo(*args, **kwargs):
     imgui.push_style_color(imgui.Col_.button, imgui.get_style().color_(imgui.Col_.button_hovered))
     result = imgui.combo(*args, **kwargs)
     imgui.pop_style_color()
     return result
 
-def tooltip_combo(label: str, current_item: int, items: list[str], item_tooltips: list[str], popup_max_height_in_items: int = -1) -> tuple[bool, int]:
+
+def tooltip_combo(
+    label: str, current_item: int, items: list[str], item_tooltips: list[str], popup_max_height_in_items: int = -1
+) -> tuple[bool, int]:
     # NB: port of ImGui::Combo, with added tooltip support
     g = imgui.get_current_context()
     items_count = len(items)
-    preview_value = items[current_item] if current_item>=0 and current_item<items_count else ''
+    preview_value = items[current_item] if current_item >= 0 and current_item < items_count else ""
 
-    if (popup_max_height_in_items != -1 and not (g.next_window_data.has_flags & imgui.internal.NextWindowDataFlags_.has_size_constraint)):
-        max_popup_height = imgui.FLT_MAX if popup_max_height_in_items<=0 else (g.font_size + g.style.item_spacing.y) * popup_max_height_in_items - g.style.item_spacing.y + (g.style.window_padding.y * 2)
-        imgui.set_next_window_size_constraints((0,0), (imgui.FLT_MAX, max_popup_height))
+    if popup_max_height_in_items != -1 and not (
+        g.next_window_data.has_flags & imgui.internal.NextWindowDataFlags_.has_size_constraint
+    ):
+        max_popup_height = (
+            imgui.FLT_MAX
+            if popup_max_height_in_items <= 0
+            else (g.font_size + g.style.item_spacing.y) * popup_max_height_in_items
+            - g.style.item_spacing.y
+            + (g.style.window_padding.y * 2)
+        )
+        imgui.set_next_window_size_constraints((0, 0), (imgui.FLT_MAX, max_popup_height))
 
     if not imgui.begin_combo(label, preview_value, imgui.ComboFlags_.none):
         return False, current_item
@@ -280,12 +347,12 @@ def tooltip_combo(label: str, current_item: int, items: list[str], item_tooltips
             imgui.push_id(i)
 
             item_text = "*Unknown item*" if items[i] is None else items[i]
-            item_selected = i==current_item
+            item_selected = i == current_item
             if imgui.selectable(item_text, item_selected)[0] and current_item != i:
                 value_changed = True
                 current_item = i
             if item_tooltips[i]:
-                draw_hover_text(item_tooltips[i], '')
+                draw_hover_text(item_tooltips[i], "")
             if item_selected:
                 imgui.set_item_default_focus()
 
@@ -296,10 +363,11 @@ def tooltip_combo(label: str, current_item: int, items: list[str], item_tooltips
 
     return value_changed, current_item
 
+
 def get_current_monitor(wx, wy, ww=None, wh=None):
     # so we always return something sensible
     monitor = glfw.get_primary_monitor()
-    bounds  = get_monitor_work_area(monitor)
+    bounds = get_monitor_work_area(monitor)
     bestoverlap = 0
     for mon in glfw.get_monitors():
         m_bounds = get_monitor_work_area(mon)
@@ -314,9 +382,7 @@ def get_current_monitor(wx, wy, ww=None, wh=None):
             my = m_bounds.position[0]
             mw = m_bounds.size[0]
             mh = m_bounds.size[1]
-            overlap = \
-                max(0, min(wx + ww, mx + mw) - max(wx, mx)) * \
-                max(0, min(wy + wh, my + mh) - max(wy, my))
+            overlap = max(0, min(wx + ww, mx + mw) - max(wx, mx)) * max(0, min(wy + wh, my + mh) - max(wy, my))
 
             if bestoverlap < overlap:
                 bestoverlap = overlap
@@ -325,28 +391,21 @@ def get_current_monitor(wx, wy, ww=None, wh=None):
 
     return monitor, bounds
 
+
 def get_monitor_work_area(monitor):
     monitor_area = glfw.get_monitor_workarea(monitor)
     return hello_imgui.ScreenBounds(monitor_area[:2], monitor_area[2:])
 
+
 def adjust_bounds_for_framesize(w_bounds, frame_size):
-    if platform.os==platform.Os.Windows:
-        pos = [
-            w_bounds.position[0],
-            w_bounds.position[1] + frame_size[1]
-        ]
-        size = [
-            w_bounds.size[0],
-            w_bounds.size[1] - frame_size[1]
-        ]
+    if platform.os == platform.Os.Windows:
+        pos = [w_bounds.position[0], w_bounds.position[1] + frame_size[1]]
+        size = [w_bounds.size[0], w_bounds.size[1] - frame_size[1]]
     else:
         pos = [
             w_bounds.position[0] + frame_size[0],
             w_bounds.position[1] + frame_size[1],
         ]
-        size = [
-            w_bounds.size[0] - (frame_size[0]+frame_size[2]),
-            w_bounds.size[1] - (frame_size[1]+frame_size[3])
-        ]
+        size = [w_bounds.size[0] - (frame_size[0] + frame_size[2]), w_bounds.size[1] - (frame_size[1] + frame_size[3])]
 
     return hello_imgui.ScreenBounds(pos, size)
