@@ -1,9 +1,13 @@
+"""Eye tracker device enumeration and JSON serialization."""
+
 import enum
 
 from . import json, utils
 
 
 class EyeTracker(utils.AutoName):
+    """Supported wearable eye tracker devices."""
+
     AdHawk_MindLink = enum.auto()
     Argus_ETVision = enum.auto()
     Generic = enum.auto()
@@ -38,10 +42,11 @@ EyeTracker.VPS_Lite.color = utils.hex_to_rgba_0_1("#003380")
 EyeTracker.Unknown.color = utils.hex_to_rgba_0_1("#393939")
 # other colors left over:
 # #FFA405, #FFA8BB, #426600, #FF0010, #5EF1F2, #00998F, #E0FF66, #740AFF, #990000, #FFFF80, #FFE100, #FF5005
-# colors taken from P. Green-Armytage (2010). "A Colour Alphabet and the Limits of Colour Coding". Colour: Design & Creativity 5 (10): 1–23.
+# colors taken from P. Green-Armytage (2010). "A Colour Alphabet and the Limits of Colour Coding". Colour: Design & Creativity 5 (10): 1-23.
 
 
 def string_to_enum(device: str | EyeTracker) -> EyeTracker:
+    """Convert a string or EyeTracker instance to an EyeTracker enum member."""
     if isinstance(device, EyeTracker):
         return device
 

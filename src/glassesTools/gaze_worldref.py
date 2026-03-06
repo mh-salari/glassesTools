@@ -1,7 +1,10 @@
+"""World-referenced gaze data: projection from head-ref to plane, I/O, and drawing."""
+
 import enum
 import math
 import pathlib
 import typing
+from typing import ClassVar
 
 import cv2
 import numpy as np
@@ -10,6 +13,8 @@ from . import data_files, drawing, gaze_headref, json, ocv, plane, pose, transfo
 
 
 class Type(utils.AutoName):
+    """Source of a world-referenced gaze point."""
+
     Scene_Video_Position = enum.auto()
     World_3D_Point = enum.auto()
     Left_Eye_Gaze_Vector = enum.auto()
@@ -25,8 +30,12 @@ json.register_type(
 
 
 class Gaze:
-    # description of tsv file used for storage
-    _columns_compressed = {
+    """A single world-referenced gaze sample with camera-space and plane-space coordinates.
+
+    Class attributes describe the TSV columns used for storage.
+    """
+
+    _columns_compressed: ClassVar[dict[str, int]] = {
         "timestamp": 1,
         "timestamp_VOR": 1,
         "timestamp_ref": 1,
@@ -46,33 +55,33 @@ class Gaze:
         "gazePosPlane2DLeft": 2,
         "gazePosPlane2DRight": 2,
     }
-    _non_float = {"frame_idx": int, "frame_idx_VOR": int, "frame_idx_ref": int}
-    _columns_optional = ["timestamp_VOR", "frame_idx_VOR", "timestamp_ref", "frame_idx_ref"]
+    _non_float: ClassVar[dict[str, type]] = {"frame_idx": int, "frame_idx_VOR": int, "frame_idx_ref": int}
+    _columns_optional: ClassVar[list[str]] = ["timestamp_VOR", "frame_idx_VOR", "timestamp_ref", "frame_idx_ref"]
 
     def __init__(
         self,
         timestamp: float,
         frame_idx: int,
-        timestamp_ori: float = None,
-        frame_idx_ori: int = None,
-        timestamp_VOR: float = None,
-        frame_idx_VOR: int = None,
-        timestamp_ref: float = None,
-        frame_idx_ref: int = None,
-        gazePosCam_vidPos_ray: np.ndarray = None,
-        gazePosCam_vidPos_homography: np.ndarray = None,
-        gazePosCamWorld: np.ndarray = None,
-        gazeOriCamLeft: np.ndarray = None,
-        gazePosCamLeft: np.ndarray = None,
-        gazeOriCamRight: np.ndarray = None,
-        gazePosCamRight: np.ndarray = None,
-        gazePosPlane2D_vidPos_ray: np.ndarray = None,
-        gazePosPlane2D_vidPos_homography: np.ndarray = None,
-        gazePosPlane2DWorld: np.ndarray = None,
-        gazePosPlane2DLeft: np.ndarray = None,
-        gazePosPlane2DRight: np.ndarray = None,
-    ):
-
+        timestamp_ori: float | None = None,
+        frame_idx_ori: int | None = None,
+        timestamp_VOR: float | None = None,
+        frame_idx_VOR: int | None = None,
+        timestamp_ref: float | None = None,
+        frame_idx_ref: int | None = None,
+        gazePosCam_vidPos_ray: np.ndarray | None = None,
+        gazePosCam_vidPos_homography: np.ndarray | None = None,
+        gazePosCamWorld: np.ndarray | None = None,
+        gazeOriCamLeft: np.ndarray | None = None,
+        gazePosCamLeft: np.ndarray | None = None,
+        gazeOriCamRight: np.ndarray | None = None,
+        gazePosCamRight: np.ndarray | None = None,
+        gazePosPlane2D_vidPos_ray: np.ndarray | None = None,
+        gazePosPlane2D_vidPos_homography: np.ndarray | None = None,
+        gazePosPlane2DWorld: np.ndarray | None = None,
+        gazePosPlane2DLeft: np.ndarray | None = None,
+        gazePosPlane2DRight: np.ndarray | None = None,
+    ) -> None:
+        """Initialize a world-referenced gaze sample."""
         self.timestamp = timestamp
         self.frame_idx = frame_idx
 
@@ -102,28 +111,29 @@ class Gaze:
         self.gazePosPlane2DLeft = gazePosPlane2DLeft  # gazePosCamLeft in plane space
         self.gazePosPlane2DRight = gazePosPlane2DRight  # gazePosCamRight in plane space
 
-    def get_gaze_point(self, gaze_type: Type, reference_frame="plane"):
-        return_3D = reference_frame in ("world", "camera")  # in all other cases return gaze on plane
+    def get_gaze_point(self, gaze_type: Type, reference_frame: str = "plane") -> np.ndarray | None:
+        """Return the gaze point for the given type and reference frame."""
+        return_3d = reference_frame in {"world", "camera"}  # in all other cases return gaze on plane
         match gaze_type:
             case Type.Scene_Video_Position:
-                gaze_point = self.gazePosCam_vidPos_ray if return_3D else self.gazePosPlane2D_vidPos_ray
+                gaze_point = self.gazePosCam_vidPos_ray if return_3d else self.gazePosPlane2D_vidPos_ray
                 if gaze_point is None:
                     # fall back to homography
                     gaze_point = (
-                        self.gazePosCam_vidPos_homography if return_3D else self.gazePosPlane2D_vidPos_homography
+                        self.gazePosCam_vidPos_homography if return_3d else self.gazePosPlane2D_vidPos_homography
                     )
             case Type.World_3D_Point:
-                gaze_point = self.gazePosCamWorld if return_3D else self.gazePosPlane2DWorld
+                gaze_point = self.gazePosCamWorld if return_3d else self.gazePosPlane2DWorld
             case Type.Left_Eye_Gaze_Vector:
-                gaze_point = self.gazePosCamLeft if return_3D else self.gazePosPlane2DLeft
+                gaze_point = self.gazePosCamLeft if return_3d else self.gazePosPlane2DLeft
             case Type.Right_Eye_Gaze_Vector:
-                gaze_point = self.gazePosCamRight if return_3D else self.gazePosPlane2DRight
+                gaze_point = self.gazePosCamRight if return_3d else self.gazePosPlane2DRight
             case Type.Average_Gaze_Vector:
                 gaze_point = None
-                if return_3D and (self.gazePosCamLeft is not None) and (self.gazePosCamRight is not None):
+                if return_3d and (self.gazePosCamLeft is not None) and (self.gazePosCamRight is not None):
                     gaze_point = (self.gazePosCamLeft, self.gazePosCamRight)
                 elif (
-                    not return_3D and (self.gazePosPlane2DLeft is not None) and (self.gazePosPlane2DRight is not None)
+                    not return_3d and (self.gazePosPlane2DLeft is not None) and (self.gazePosPlane2DRight is not None)
                 ):
                     gaze_point = (self.gazePosPlane2DLeft, self.gazePosPlane2DRight)
                 if gaze_point is not None:
@@ -132,25 +142,27 @@ class Gaze:
 
     def draw_on_world_video(
         self,
-        img,
+        img: np.ndarray,
         camera_params: ocv.CameraParams,
-        sub_pixel_fac=1,
-        pose: pose.Pose = None,
-        clr_vidPos=(255, 255, 0),
-        clr_world_pos=(255, 0, 255),
-        clr_left=(0, 0, 255),
-        clr_right=(255, 0, 0),
-        clr_average=(255, 0, 255),
-    ):
+        sub_pixel_fac: int = 1,
+        pose: pose.Pose | None = None,
+        clr_vidPos: tuple[int, int, int] = (255, 255, 0),
+        clr_world_pos: tuple[int, int, int] = (255, 0, 255),
+        clr_left: tuple[int, int, int] = (0, 0, 255),
+        clr_right: tuple[int, int, int] = (255, 0, 0),
+        clr_average: tuple[int, int, int] = (255, 0, 255),
+    ) -> None:
+        """Draw all available gaze points projected onto the world video frame."""
+
         # project to camera, display
-        def _project(pos):
+        def _project(pos: np.ndarray) -> np.ndarray:
             return transforms.project_points(pos.reshape(1, 3), camera_params).flatten()
 
-        def _draw(img, cam_pos, sz, clr):
+        def _draw(img: np.ndarray, cam_pos: np.ndarray, sz: int, clr: tuple[int, int, int]) -> None:
             if not math.isnan(cam_pos[0]):
                 drawing.openCVCircle(img, cam_pos, sz, clr, -1, sub_pixel_fac)
 
-        def project_and_draw(img, pos, sz, clr):
+        def project_and_draw(img: np.ndarray, pos: np.ndarray, sz: int, clr: tuple[int, int, int]) -> None:
             _draw(img, _project(pos), sz, clr)
 
         if not camera_params.has_intrinsics():
@@ -180,11 +192,12 @@ class Gaze:
         # average
         if (
             clr_average is not None
-            and (pointCam := self.get_gaze_point(Type.Average_Gaze_Vector, "world")) is not None
+            and (point_cam := self.get_gaze_point(Type.Average_Gaze_Vector, "world")) is not None
         ):
-            project_and_draw(img, pointCam, 6, clr_average)
+            project_and_draw(img, point_cam, 6, clr_average)
 
-    def draw_on_plane(self, img, reference, sub_pixel_fac=1):
+    def draw_on_plane(self, img: np.ndarray, reference: plane.Plane, sub_pixel_fac: int = 1) -> None:
+        """Draw all available gaze points on a plane image."""
         # binocular gaze point
         if self.gazePosPlane2DWorld is not None:
             reference.draw(img, *self.gazePosPlane2DWorld, sub_pixel_fac, (0, 255, 255), 3)
@@ -195,9 +208,8 @@ class Gaze:
         if self.gazePosPlane2DRight is not None:
             reference.draw(img, *self.gazePosPlane2DRight, sub_pixel_fac, (255, 0, 0), 3)
         # average
-        if (average := self.get_gaze_point(Type.Average_Gaze_Vector)) is not None:
-            if not math.isnan(average[0]):
-                reference.draw(img, *average, sub_pixel_fac, (255, 0, 255))
+        if (average := self.get_gaze_point(Type.Average_Gaze_Vector)) is not None and not math.isnan(average[0]):
+            reference.draw(img, *average, sub_pixel_fac, (255, 0, 255))
         # video gaze position
         if self.gazePosPlane2D_vidPos_homography is not None:
             reference.draw(img, *self.gazePosPlane2D_vidPos_homography, sub_pixel_fac, (0, 255, 0), 5)
@@ -208,12 +220,16 @@ class Gaze:
 def read_dict_from_file(
     file_name: str | pathlib.Path, episodes: list[list[int]] | None = None, ts_column_suffixes: list[str] | None = None
 ) -> dict[int, list[Gaze]]:
+    """Read world-referenced gaze data from a TSV file into a dict keyed by frame index."""
     return data_files.read_file(
         file_name, Gaze, False, False, True, True, episodes=episodes, ts_fridx_field_suffixes=ts_column_suffixes
     )[0]
 
 
-def write_dict_to_file(gazes: list[Gaze] | dict[int, list[Gaze]], file_name: str | pathlib.Path, skip_missing=False):
+def write_dict_to_file(
+    gazes: list[Gaze] | dict[int, list[Gaze]], file_name: str | pathlib.Path, skip_missing: bool = False
+) -> None:
+    """Write world-referenced gaze data to a TSV file."""
     data_files.write_array_to_file(
         gazes, file_name, Gaze._columns_compressed, Gaze._columns_optional, skip_all_nan=skip_missing
     )
@@ -226,7 +242,7 @@ def from_head(
     poses: dict[int, pose.Pose],
     gazes_head: dict[int, list[gaze_headref.Gaze]],
     camera_params: ocv.CameraParams,
-    progress_updater: typing.Callable[[], None] = None,
+    progress_updater: typing.Callable[[], None] | None = None,
 ) -> dict[int, list[Gaze]]: ...
 
 
@@ -234,8 +250,9 @@ def from_head(
     poses: pose.Pose | dict[int, pose.Pose],
     gazes: gaze_headref.Gaze | dict[int, list[gaze_headref.Gaze]],
     camera_params: ocv.CameraParams,
-    progress_updater: typing.Callable[[], None] = None,
+    progress_updater: typing.Callable[[], None] | None = None,
 ) -> Gaze | dict[int, list[Gaze]]:
+    """Project head-referenced gaze data to world coordinates using camera poses."""
     if not isinstance(poses, dict):
         return _from_head_impl(poses, gazes, camera_params)
 
@@ -268,10 +285,10 @@ def _from_head_impl(pose: pose.Pose, gaze: gaze_headref.Gaze, camera_params: ocv
         camera_position = camera_params.position
         if camera_rotation is None:
             camera_rotation = np.zeros((3, 1))
-        RCam = cv2.Rodrigues(camera_rotation)[0]
+        r_cam = cv2.Rodrigues(camera_rotation)[0]
         if camera_position is None:
             camera_position = np.zeros((3, 1))
-        RtCam = np.hstack((RCam, camera_position.reshape((3, 1))))
+        rt_cam = np.hstack((r_cam, camera_position.reshape((3, 1))))
 
         # project gaze on video to reference plane using camera pose
         gaze_world.gazePosPlane2D_vidPos_ray, gaze_world.gazePosCam_vidPos_ray = pose.cam_to_plane_pose(
@@ -281,15 +298,15 @@ def _from_head_impl(pose: pose.Pose, gaze: gaze_headref.Gaze, camera_params: ocv
         # project world-space gaze point (often binocular gaze point) to plane
         if gaze.gaze_pos_3d is not None:
             # transform 3D gaze point from eye tracker space to camera space
-            g3D = np.matmul(RtCam, np.append(gaze.gaze_pos_3d, 1).reshape(4, 1))
+            g_3d = np.matmul(rt_cam, np.append(gaze.gaze_pos_3d, 1).reshape(4, 1))
 
             # find intersection with plane (NB: pose is in camera reference frame)
             gaze_world.gazePosCamWorld = pose.vector_intersect(
-                g3D
+                g_3d
             )  # default vec origin (0,0,0) is fine because we work from camera's view point
 
             # above intersection is in camera space, turn into plane space to get position on plane
-            (x, y, z) = pose.cam_frame_to_world(gaze_world.gazePosCamWorld)  # z should be very close to zero
+            (x, y, _z) = pose.cam_frame_to_world(gaze_world.gazePosCamWorld)  # z should be very close to zero
             gaze_world.gazePosPlane2DWorld = np.asarray([x, y])
 
     # unproject 2D gaze point on video to point on plane (should yield values very close to
@@ -316,27 +333,28 @@ def _from_head_impl(pose: pose.Pose, gaze: gaze_headref.Gaze, camera_params: ocv
         ["gazeOriCamLeft", "gazePosCamLeft", "gazePosPlane2DLeft"],
         ["gazeOriCamRight", "gazePosCamRight", "gazePosPlane2DRight"],
     ]
-    for gVec, gOri, attr in zip(gaze_vecs, gaze_origins, attrs):
-        if gVec is None or gOri is None:
+    for g_vec, g_ori, attr in zip(gaze_vecs, gaze_origins, attrs, strict=True):
+        if g_vec is None or g_ori is None:
             continue
         # get gaze vector and point on vector (origin, e.g. pupil center) ->
         # transform from ET data coordinate frame into camera coordinate frame
-        gVec = np.matmul(RCam, gVec)
-        gOri = np.matmul(RtCam, np.append(gOri, 1.0))
-        setattr(gaze_world, attr[0], gOri)
+        g_vec_cam = np.matmul(r_cam, g_vec)
+        g_ori_cam = np.matmul(rt_cam, np.append(g_ori, 1.0))
+        setattr(gaze_world, attr[0], g_ori_cam)
 
         # intersect with plane -> yield point on plane in camera reference frame
-        gPlane = pose.vector_intersect(gVec, gOri)
-        setattr(gaze_world, attr[1], gPlane)
+        g_plane = pose.vector_intersect(g_vec_cam, g_ori_cam)
+        setattr(gaze_world, attr[1], g_plane)
 
         # transform intersection with plane from camera space to plane space
-        (x, y, z) = pose.cam_frame_to_world(gPlane)  # z should be very close to zero
+        (x, y, _z) = pose.cam_frame_to_world(g_plane)  # z should be very close to zero
         setattr(gaze_world, attr[2], np.asarray([x, y]))
 
     return gaze_world
 
 
-def distance_from_plane(gaze: Gaze, plane: plane.Plane):
+def distance_from_plane(gaze: Gaze, plane: plane.Plane) -> float:
+    """Return the distance of the gaze point from the plane bounding box, or NaN."""
     if gaze.gazePosPlane2D_vidPos_ray is not None and not math.isnan(gaze.gazePosPlane2D_vidPos_ray[0]):
         gp = gaze.gazePosPlane2D_vidPos_ray
     elif gaze.gazePosPlane2D_vidPos_homography is not None and not math.isnan(

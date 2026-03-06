@@ -156,3 +156,6 @@ lint.ignore = [
 "src/glassesTools/__init__.py" = ["RUF067"]  # ffmpeg path setup must run at import time
 "src/glassesTools/json.py" = ["ANN401"]  # JSON serialization legitimately uses typing.Any
 "src/glassesTools/data_files.py" = ["ANN401", "SLF001"]  # record_class accepts any class; accesses internal _columns_compressed etc. by design
+"src/glassesTools/gaze_headref.py" = ["N803", "SLF001"]  # param names must match TSV column names (e.g. timestamp_VOR); accesses own class _columns_*
+"src/glassesTools/gaze_worldref.py" = ["N803", "SLF001"]  # param names must match TSV column names; accesses own class _columns_*
+"src/glassesTools/fixation_classification.py" = ["N803"]  # I2MC_settings_override uses library name
