@@ -33,7 +33,6 @@ class State(enum.IntEnum):
     Pending = enum.auto()
     Running = enum.auto()
     Completed = enum.auto()
-    # two more states needed by process_pool/GUI
     Canceled = enum.auto()
     Failed = enum.auto()
 
@@ -326,7 +325,7 @@ class JobDescription(typing.Generic[_UserDataT]):
     done_callback: typing.Callable[[ProcessFuture, _UserDataT, int, State], None]
 
     exclusive_id: int | None = (
-        None  # if set, only one task with a given id can be run at a time, rest are kept in waiting. E.g. to ensure only one task needing a gui is run at a time
+        None  # if set, only one task with a given id can be run at a time, rest are kept in waiting
     )
     priority: int = 999  # jobs with a higher priority are scheduled first, unless they cannot be because they're exclusive (exclusive_id is set) and task of that exclusivity is already running, or because their dependencies are not met yet
     depends_on: set[int] | None = None  # set of job ids that need to be completed before this one can be launched
