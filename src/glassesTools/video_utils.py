@@ -1,3 +1,5 @@
+"""Video file parsing, timestamp extraction, and frame-number mapping."""
+
 import pathlib
 import subprocess
 
@@ -8,16 +10,18 @@ import pandas as pd
 from .mp4analyser import iso
 
 
-def av_rescale(a, b, c):
-    # a * b / c, rounding to nearest and halfway cases away from zero
-    # e.g., scale a from timebase c to timebase b
-    # from ffmpeg libavutil mathematics.c, porting the simple case assuming that a, b and c <= INT_MAX
+def av_rescale(a: np.int64, b: np.int64, c: np.int64) -> np.int64:
+    """Scale ``a`` from timebase ``c`` to timebase ``b``, rounding to nearest.
+
+    Ported from ffmpeg libavutil mathematics.c (simple case, a/b/c <= INT_MAX).
+    """
     r = c // 2
     return (a * b + r) // c
 
 
-def is_isobmmf(vid_file: pathlib.Path):
-    return vid_file.suffix in [".mov", ".mp4", ".m4a", ".3gp", ".3g2", ".mj2"]
+def is_isobmmf(vid_file: pathlib.Path) -> bool:
+    """Return True if the file extension indicates an ISO base media file format."""
+    return vid_file.suffix in {".mov", ".mp4", ".m4a", ".3gp", ".3g2", ".mj2"}
 
 
 def _get_isobmmf_timestamps(vid_file: pathlib.Path) -> np.ndarray | None:
@@ -30,10 +34,10 @@ def _get_isobmmf_timestamps(vid_file: pathlib.Path) -> np.ndarray | None:
     if len(vid_tracks) != 1:
         raise RuntimeError(f"File has {len(vid_tracks)} video tracks (more than one), not supported")
     # 1. find mdat box
-    moov = boxes.children[[i for i, x in enumerate(boxes.children) if x.type == "moov"][0]]
+    moov = boxes.children[next(i for i, x in enumerate(boxes.children) if x.type == "moov")]
     # 2. get global/movie time scale
     movie_time_scale = np.int64(
-        moov.children[[i for i, x in enumerate(moov.children) if x.type == "mvhd"][0]].box_info["timescale"]
+        moov.children[next(i for i, x in enumerate(moov.children) if x.type == "mvhd")].box_info["timescale"]
     )
     # 3. find video track boxes
     trak_idxs = [i for i, x in enumerate(moov.children) if x.type == "trak"]
@@ -42,9 +46,9 @@ def _get_isobmmf_timestamps(vid_file: pathlib.Path) -> np.ndarray | None:
         raise RuntimeError(f"File has {len(vid_tracks)} video tracks (more than one), not supported")
     trak = moov.children[trak_idxs[0]]
     # 4. get mdia box
-    mdia = trak.children[[i for i, x in enumerate(trak.children) if x.type == "mdia"][0]]
+    mdia = trak.children[next(i for i, x in enumerate(trak.children) if x.type == "mdia")]
     # 5. get media/track time_scale and duration fields from mdhd
-    mdhd = mdia.children[[i for i, x in enumerate(mdia.children) if x.type == "mdhd"][0]]
+    mdhd = mdia.children[next(i for i, x in enumerate(mdia.children) if x.type == "mdhd")]
     media_time_scale = mdhd.box_info["timescale"]
     # 6. check for presence of edit list
     # if its there, check its one we understand (one or multiple empty list at the beginning
@@ -87,33 +91,33 @@ def _get_isobmmf_timestamps(vid_file: pathlib.Path) -> np.ndarray | None:
                     "File contains an edit list that is too complicated (multiple non-empty edits) for this parser, not supported"
                 )
     # 7. get stbl
-    minf = mdia.children[[i for i, x in enumerate(mdia.children) if x.type == "minf"][0]]
-    stbl = minf.children[[i for i, x in enumerate(minf.children) if x.type == "stbl"][0]]
+    minf = mdia.children[next(i for i, x in enumerate(mdia.children) if x.type == "minf")]
+    stbl = minf.children[next(i for i, x in enumerate(minf.children) if x.type == "stbl")]
     # 8. check whether we have a ctts atom
     ctts_idx = [i for i, x in enumerate(stbl.children) if x.type == "ctts"]
     if ctts_idx:
         ctts_ = stbl.children[ctts_idx[0]].box_info["entry_list"]
-        if any([e["sample_offset"] < 0 for e in ctts_]):
+        if any(e["sample_offset"] < 0 for e in ctts_):
             # if we need to deal with them, we'd probably want to completely port mov_build_index() and mov_fix_index() in ffmpeg's libavformat/mov.c
             raise RuntimeError(
                 "Encountered a ctts (composition offset) atom with negative sample offsets, cannot handle that. aborting."
             )
         # uncompress
-        total_frames_ctts = sum([e["sample_count"] for e in ctts_])
+        total_frames_ctts = sum(e["sample_count"] for e in ctts_)
         ctts = np.zeros(total_frames_ctts, dtype=np.int64)
         idx = 0
         for e in ctts_:
             ctts[idx : idx + e["sample_count"]] = e["sample_offset"]
-            idx = idx + e["sample_count"]
+            idx += e["sample_count"]
     # 9. get sample table from stts
-    stts = stbl.children[[i for i, x in enumerate(stbl.children) if x.type == "stts"][0]].box_info["entry_list"]
+    stts = stbl.children[next(i for i, x in enumerate(stbl.children) if x.type == "stts")].box_info["entry_list"]
     # uncompress the delta table
-    total_frames_stts = sum([e["sample_count"] for e in stts])
+    total_frames_stts = sum(e["sample_count"] for e in stts)
     dts = np.zeros(total_frames_stts, dtype=np.int64)
     idx = 0
     for e in stts:
         dts[idx : idx + e["sample_count"]] = e["sample_delta"]
-        idx = idx + e["sample_count"]
+        idx += e["sample_count"]
 
     # 10. now put it all together
     # turn into timestamps
@@ -213,8 +217,10 @@ def _get_frame_timestamps_from_video(vid_file: pathlib.Path) -> np.array:
 
 
 def get_frame_timestamps_from_video(vid_file: pathlib.Path) -> pd.DataFrame:
-    """Parse the supplied video, return an array of frame timestamps. There must be only one video stream
-    in the video file, because otherwise we do not know which is the correct stream.
+    """Parse the supplied video, return an array of frame timestamps.
+
+    There must be only one video stream in the video file, because otherwise
+    we do not know which is the correct stream.
     """
     frame_ts = _get_frame_timestamps_from_video(vid_file)
 
@@ -225,18 +231,21 @@ def get_frame_timestamps_from_video(vid_file: pathlib.Path) -> pd.DataFrame:
 
 
 def get_video_duration(vid_file: pathlib.Path) -> float:
-    # get duration of video file in seconds
+    """Return the duration of a video file in milliseconds."""
     if is_isobmmf(vid_file):
         frame_ts = _get_frame_timestamps_from_video(vid_file)
         return float(frame_ts[-1] - frame_ts[0])
     vid = cv2.VideoCapture(vid_file)
     fps = vid.get(cv2.CAP_PROP_FPS)
-    totalNoFrames = vid.get(cv2.CAP_PROP_FRAME_COUNT)
+    total_frames = vid.get(cv2.CAP_PROP_FRAME_COUNT)
     vid.release()
-    return float(totalNoFrames / fps * 1000)
+    return float(total_frames / fps * 1000)
 
 
-def timestamps_to_frame_number(ts, frame_timestamps, mode="nearest", trim=False):
+def timestamps_to_frame_number(
+    ts: np.ndarray, frame_timestamps: np.ndarray | list, mode: str = "nearest", trim: bool = False
+) -> pd.DataFrame:
+    """Map timestamps to frame numbers using the given frame-timestamp array."""
     df = pd.DataFrame(index=ts)
     df.insert(0, "frame_idx", np.int64(0))
     if isinstance(frame_timestamps, list):
@@ -262,8 +271,8 @@ def timestamps_to_frame_number(ts, frame_timestamps, mode="nearest", trim=False)
         # set any timestamps before to -1
         idxs[df.index < 0] = -1
         # get average frame interval, and set data beyond framets+1 extra frame to -1 as well
-        avIFI = np.mean(np.diff(df.index.to_numpy()))
-        idxs[df.index > frame_timestamps[-1] + avIFI] = -1
+        av_ifi = np.mean(np.diff(df.index.to_numpy()))
+        idxs[df.index > frame_timestamps[-1] + av_ifi] = -1
 
     df = df.assign(frame_idx=idxs)
     if mode == "after":

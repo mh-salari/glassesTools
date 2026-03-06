@@ -1,5 +1,6 @@
+"""Camera recording data model and import utilities."""
+
 import dataclasses
-import json
 import os
 import pathlib
 import shutil
@@ -10,6 +11,8 @@ from . import json, utils, video_utils
 
 
 class Type(utils.AutoName):
+    """Camera recording type classification."""
+
     External = auto()
     Head_attached = auto()
 
@@ -23,6 +26,8 @@ json.register_type(
 
 @dataclasses.dataclass
 class Recording:
+    """Data model for a camera recording with JSON serialization."""
+
     default_json_file_name: typing.ClassVar[str] = "recording_info.json"
 
     name: str
@@ -32,20 +37,22 @@ class Recording:
     working_directory: pathlib.Path = ""
     duration: float = None
 
-    def store_as_json(self, path: str | pathlib.Path):
+    def store_as_json(self, path: str | pathlib.Path) -> None:
+        """Serialize recording metadata to a JSON file."""
         path = pathlib.Path(path)
         if path.is_dir():
             path /= self.default_json_file_name
         # remove any crap potentially added by subclasses
         to_dump = dataclasses.asdict(self)
         to_dump = {
-            k: to_dump[k] for k in to_dump if k in Recording.__annotations__ and k not in ["working_directory"]
+            k: to_dump[k] for k in to_dump if k in Recording.__annotations__ and k != "working_directory"
         }  # working_directory will be loaded as the provided path, and shouldn't be stored
         # dump to file
         json.dump(to_dump, path)
 
     @staticmethod
-    def load_from_json(path: str | pathlib.Path):
+    def load_from_json(path: str | pathlib.Path) -> "Recording":
+        """Deserialize recording metadata from a JSON file."""
         path = pathlib.Path(path)
         if path.is_dir():
             path /= Recording.default_json_file_name
@@ -58,7 +65,8 @@ class Recording:
             kwds["type"] = Type.External
         return Recording(**kwds, working_directory=path.parent)
 
-    def get_video_path(self):
+    def get_video_path(self) -> pathlib.Path:
+        """Resolve the full path to the video file."""
         vid = self.working_directory / self.video_file
         if not vid.is_file():
             if not self.source_directory.is_absolute():
@@ -67,8 +75,9 @@ class Recording:
                 vid = self.source_directory / self.video_file
         return vid
 
-    def get_source_directory(self) -> pathlib.Path:
-        if self.source_directory == "":
+    def get_source_directory(self) -> pathlib.Path | None:
+        """Resolve the full path to the source directory."""
+        if not self.source_directory:
             return None
         if not self.source_directory.is_absolute():
             return (self.working_directory / self.source_directory).resolve()
@@ -76,8 +85,12 @@ class Recording:
 
 
 def do_import(
-    rec_info: Recording, cam_cal_file: str | pathlib.Path = None, copy_video=True, source_dir_as_relative_path=False
-):
+    rec_info: Recording,
+    cam_cal_file: str | pathlib.Path | None = None,
+    copy_video: bool = True,
+    source_dir_as_relative_path: bool = False,
+) -> Recording:
+    """Import a camera recording into the working directory."""
     if not rec_info.working_directory:
         raise ValueError("working_directory must be set on the rec_info object")
     rec_info.working_directory = pathlib.Path(rec_info.working_directory)

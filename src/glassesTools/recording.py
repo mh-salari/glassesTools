@@ -1,3 +1,5 @@
+"""Eye-tracker recording data model and discovery utilities."""
+
 import dataclasses
 import pathlib
 import typing
@@ -11,12 +13,14 @@ from .timestamps import Timestamp
 
 @dataclasses.dataclass
 class Recording:
+    """Data model for an eye-tracker recording with JSON serialization."""
+
     default_json_file_name: typing.ClassVar[str] = "recording_info.json"
 
     name: str = ""
     source_directory: pathlib.Path = ""
     working_directory: pathlib.Path = ""
-    start_time: Timestamp = Timestamp(0)
+    start_time: Timestamp = dataclasses.field(default_factory=lambda: Timestamp(0))
     duration: float = None
     eye_tracker: EyeTracker = EyeTracker.Unknown
     eye_tracker_name: str = ""  # name to show if eye_tracker is EyeTracker.Generic
@@ -29,20 +33,22 @@ class Recording:
     scene_camera_serial: str = ""
     scene_video_file: str = ""
 
-    def store_as_json(self, path: str | pathlib.Path):
+    def store_as_json(self, path: str | pathlib.Path) -> None:
+        """Serialize recording metadata to a JSON file."""
         path = pathlib.Path(path)
         if path.is_dir():
             path /= self.default_json_file_name
         # remove any crap potentially added by subclasses
         to_dump = dataclasses.asdict(self)
         to_dump = {
-            k: to_dump[k] for k in to_dump if k in Recording.__annotations__ and k not in ["working_directory"]
+            k: to_dump[k] for k in to_dump if k in Recording.__annotations__ and k != "working_directory"
         }  # working_directory will be loaded as the provided path, and shouldn't be stored
         # dump to file
         json.dump(to_dump, path)
 
     @staticmethod
     def load_from_json(path: str | pathlib.Path) -> "Recording":
+        """Deserialize recording metadata from a JSON file."""
         path = pathlib.Path(path)
         if path.is_dir():
             path /= Recording.default_json_file_name
@@ -51,6 +57,7 @@ class Recording:
         return Recording(**kwds, working_directory=path.parent)
 
     def get_scene_video_path(self) -> pathlib.Path:
+        """Resolve the full path to the scene video file."""
         vid = self.working_directory / self.scene_video_file
         if not vid.is_file():
             if not self.source_directory.is_absolute():
@@ -59,16 +66,20 @@ class Recording:
                 vid = self.source_directory / self.scene_video_file
         return vid
 
-    def get_source_directory(self) -> pathlib.Path:
-        if self.source_directory == "":
+    def get_source_directory(self) -> pathlib.Path | None:
+        """Resolve the full path to the source directory."""
+        if not self.source_directory:
             return None
         if not self.source_directory.is_absolute():
             return (self.working_directory / self.source_directory).resolve()
         return self.source_directory
 
 
-def find_recordings(paths: list[pathlib.Path], eye_tracker: EyeTracker, device_name: str = None) -> list[Recording]:
-    from . import importing
+def find_recordings(
+    paths: list[pathlib.Path], eye_tracker: EyeTracker, device_name: str | None = None
+) -> list[Recording]:
+    """Scan directories for valid eye-tracker recordings."""
+    from . import importing  # noqa: PLC0415
 
     all_recs = []
     for p in paths:

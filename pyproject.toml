@@ -163,3 +163,5 @@ lint.ignore = [
 "src/glassesTools/fixation_classification.py" = ["N803"]  # I2MC_settings_override uses library name
 "src/glassesTools/marker.py" = ["N803", "SLF001"]  # R_vec/T_vec match TSV columns; accesses _columns_compressed/_non_float
 "src/glassesTools/pose.py" = ["N803", "SLF001"]  # pose_R_vec/pose_T_vec/pose_N_points match TSV columns; accesses _columns_compressed
+"src/glassesTools/gaze_overlay_video.py" = ["S404", "S603", "S605"]  # legitimate ffprobe/ffmpeg subprocess calls
+"src/glassesTools/video_utils.py" = ["S404", "S603"]  # legitimate ffprobe subprocess calls

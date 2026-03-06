@@ -1,3 +1,5 @@
+"""Gaze overlay video generation using ffpyplayer and OpenCV."""
+
 import os
 import pathlib
 import shutil
@@ -16,12 +18,16 @@ from . import gaze_headref, naming, ocv, timestamps, video_utils
 
 
 class Status(Enum):
+    """Processing status for individual video frames."""
+
     Ok = auto()
     Skip = auto()
     Finished = auto()
 
 
 class VideoMaker:
+    """Produce a gaze-overlay video from eye-tracking data and a scene recording."""
+
     def __init__(
         self,
         output_path: str | pathlib.Path,
@@ -29,7 +35,8 @@ class VideoMaker:
         frame_timestamp_file: str | pathlib.Path | timestamps.VideoTimestamps,
         camera_calibration_file: str | pathlib.Path | ocv.CameraParams,
         gaze_data_file: str | pathlib.Path | dict[int, list[gaze_headref.Gaze]],
-    ):
+    ) -> None:
+        """Initialize VideoMaker with source video, timestamps, calibration, and gaze data."""
         self.src_video = pathlib.Path(video_file)
         self.output_path = pathlib.Path(output_path)
         if self.output_path.is_dir():
@@ -70,22 +77,24 @@ class VideoMaker:
         )
         codec = ffpyplayer.tools.get_format_codec(fmt=self.output_path.suffix[1:])
         pix_fmt = ffpyplayer.tools.get_best_pix_fmt("bgr24", ffpyplayer.tools.get_supported_pixfmts(codec))
-        fpsFrac = Fraction(self._fps).limit_denominator(10000).as_integer_ratio()
+        fps_frac = Fraction(self._fps).limit_denominator(10000).as_integer_ratio()
         out_opts = {
             "pix_fmt_in": "bgr24",
             "pix_fmt_out": pix_fmt,
             "width_in": self._res[1],
             "height_in": self._res[0],
-            "frame_rate": fpsFrac,
+            "frame_rate": fps_frac,
         }
         self._vid_writer = MediaWriter(str(self.output_path), [out_opts], overwrite=True)
 
-    def set_progress_updater(self, progress_updater: typing.Callable[[], None]):
+    def set_progress_updater(self, progress_updater: typing.Callable[[], None]) -> None:
+        """Set a callback function to report encoding progress."""
         self.progress_updater = progress_updater
 
     def set_vid_pos_look(
         self, color: tuple[int, int, int] | None = None, radius: int | None = None, thickness: int | None = None
-    ):
+    ) -> None:
+        """Configure the appearance of video-frame gaze position markers."""
         if color is not None:
             # provided colors are in RGB, internally we store as BGR
             self.vid_pos_color = color[::-1]
@@ -96,7 +105,8 @@ class VideoMaker:
 
     def set_world_pos_look(
         self, color: tuple[int, int, int] | None = None, radius: int | None = None, thickness: int | None = None
-    ):
+    ) -> None:
+        """Configure the appearance of world-referenced gaze position markers."""
         if color is not None:
             # provided colors are in RGB, internally we store as BGR
             self.world_pos_color = color[::-1]
@@ -130,7 +140,8 @@ class VideoMaker:
         return self._cache
 
     def process_one_frame(self) -> Status:
-        status, (frame, frame_idx, frame_ts) = self._read_frame()
+        """Read, annotate, and encode a single video frame."""
+        status, (frame, frame_idx, _frame_ts) = self._read_frame()
         if status == Status.Finished:
             return status
         if frame is None:
@@ -160,7 +171,10 @@ class VideoMaker:
         if self.progress_updater:
             self.progress_updater()
 
-    def finish_video(self):
+        return status
+
+    def finish_video(self) -> None:
+        """Close the video writer and optionally mux audio from the source."""
         self._vid_writer.close()
         # if ffmpeg is on path, add audio to scene video
         if (shutil.which("ffmpeg") is not None) and (shutil.which("ffprobe") is not None):
@@ -182,8 +196,8 @@ class VideoMaker:
             if not err and out.decode().strip() == "audio":
                 # file has audio, lets go
                 # move file to temp name
-                tempName = self.output_path.with_stem(self.output_path.stem + "_temp")
-                shutil.move(self.output_path, tempName)
+                temp_name = self.output_path.with_stem(self.output_path.stem + "_temp")
+                shutil.move(self.output_path, temp_name)
 
                 # add audio
                 cmds = [
@@ -193,7 +207,7 @@ class VideoMaker:
                     "error",
                     "-y",
                     "-i",
-                    f'"{tempName}"',
+                    f'"{temp_name}"',
                     "-i",
                     f'"{self.src_video}"',
                     "-vcodec",
@@ -210,12 +224,13 @@ class VideoMaker:
 
                 # clean up
                 if self.output_path.exists():
-                    tempName.unlink(missing_ok=True)
+                    temp_name.unlink(missing_ok=True)
                 else:
                     # something failed. Put file without audio back under output name
-                    shutil.move(tempName, self.output_path)
+                    shutil.move(temp_name, self.output_path)
 
-    def process_video(self):
+    def process_video(self) -> None:
+        """Process all frames and finalize the output video."""
         while True:
             status = self.process_one_frame()
             if status == Status.Finished:
