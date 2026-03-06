@@ -1,35 +1,43 @@
+"""Reading and writing tabular data files for eye tracker recordings."""
+
 import importlib
 import pathlib
 from collections import defaultdict
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
 import polars as pl
 
 
-def get_column_labels(lbl, N=3):
-    if N <= 3:
-        return [lbl + "_%s" % (chr(c)) for c in range(ord("x"), ord("x") + N)]
-    if N == 9:
-        return [lbl + "[%d,%d]" % (r, c) for r in range(3) for c in range(3)]
-    raise ValueError(f"N input should be <=3 or 9, was {N}")
+def get_column_labels(lbl: str, n: int = 3) -> list[str]:
+    """Generate column label suffixes for multi-component data fields."""
+    if n <= 3:
+        return [f"{lbl}_{chr(c)}" for c in range(ord("x"), ord("x") + n)]
+    if n == 9:
+        return [f"{lbl}[{r},{c}]" for r in range(3) for c in range(3)]
+    raise ValueError(f"n input should be <=3 or 9, was {n}")
 
 
-def none_if_any_nan(vals):
+def none_if_any_nan(vals: np.ndarray) -> np.ndarray | None:
+    """Return the array as-is if it contains no NaN values, otherwise return None."""
     if not np.any(np.isnan(vals)):
         return vals
     return None
 
 
-def all_nan_if_none(vals, numel):
+def all_nan_if_none(vals: np.ndarray | None, numel: int) -> np.ndarray:
+    """Return the array, or a NaN-filled array of length *numel* if *vals* is None."""
     if vals is None:
         return np.full((numel,), np.nan)
     return vals
 
 
 # read coordinate files (e.g. marker files, which have the colums ID, x, y, rotation_angle)
-def _read_coord_file_impl(file):
+def _read_coord_file_impl(file: str | pathlib.Path) -> pd.DataFrame:
     return (
         pd
         .read_csv(file, dtype=defaultdict(lambda: np.float32, ID="int32", color="str"))
@@ -38,22 +46,25 @@ def _read_coord_file_impl(file):
     )
 
 
-def read_coord_file(file, package_to_read_from=None) -> pd.DataFrame | None:
-    # if directory is not provided, try to read the file from the package resources instead
+def read_coord_file(file: str | pathlib.Path, package_to_read_from: str | None = None) -> pd.DataFrame | None:
+    """Read a coordinate file (e.g. marker file with columns ID, x, y, rotation_angle).
+
+    If *package_to_read_from* is given, read from package resources instead of the filesystem.
+    """
     if package_to_read_from:
         with importlib.resources.path(package_to_read_from, file) as p:
             return _read_coord_file_impl(p)
-    elif file.is_file():
+    if file.is_file():
         return _read_coord_file_impl(file)
-    else:
-        return None
+    return None
 
 
-def uncompress_columns(cols_compressed: dict[str, int]):
+def uncompress_columns(cols_compressed: dict[str, int]) -> list[list[str]]:
+    """Expand compressed column definitions into lists of individual column names."""
     return [get_column_labels(c, N) if (N := cols_compressed[c]) > 1 else [c] for c in cols_compressed]
 
 
-def _get_col_name_with_suffix(base: str, suf: str):
+def _get_col_name_with_suffix(base: str, suf: str) -> str:
     if not suf:
         return base
     return base + "_" + suf
@@ -61,21 +72,21 @@ def _get_col_name_with_suffix(base: str, suf: str):
 
 def read_file(
     file_name: str | pathlib.Path,
-    object: Any,
+    record_class: Any,
     drop_if_all_nan: bool,
     put_none_if_any_nan: bool,
     as_list_dict: bool,
     make_ori_ts_fridx: bool,
     episodes: list[list[int]] | None = None,
     ts_fridx_field_suffixes: list[str] | None = None,
-    subset_var="frame_idx",
-):
-
-    # interrogate destination object
-    cols_compressed: dict[str, int] = object._columns_compressed
-    dtypes: dict[str, Any] = object._non_float
+    subset_var: str = "frame_idx",
+) -> tuple[dict, Any]:
+    """Read a tab-separated data file and return records grouped by *subset_var*."""
+    # interrogate destination record_class
+    cols_compressed: dict[str, int] = record_class._columns_compressed
+    dtypes: dict[str, Any] = record_class._non_float
     column_patches: dict[str, tuple[str, Callable]] = (
-        object._column_patches if hasattr(object, "_column_patches") else None
+        record_class._column_patches if hasattr(record_class, "_column_patches") else None
     )
     # add patches, if any, to dtypes so these column are read correctly to
     if column_patches is not None:
@@ -92,8 +103,7 @@ def read_file(
     # if we have column renaming to do, do it now
     if column_patches is not None:
         # apply operations, if any
-        for on in column_patches:
-            op = column_patches[on][1]
+        for on, (_, op) in column_patches.items():
             if on not in df.columns or op is None:
                 continue
             df[on] = op(df[on])
@@ -108,18 +118,18 @@ def read_file(
         df = df.dropna(how="all", subset=[c for cs in cols_uncompressed if len(cs) > 1 for c in cs])
 
     # group columns into numpy arrays, optionally insert None if missing
-    for c, ac in zip(cols_compressed, cols_uncompressed):
+    for c, ac in zip(cols_compressed, cols_uncompressed, strict=True):
         if len(ac) == 1:
             continue  # nothing to do, would just copy column to itself
         if ac:
-            if not any([a in df.columns for a in ac]):
+            if not any(a in df.columns for a in ac):
                 continue
             if put_none_if_any_nan:
                 df[c] = [
-                    none_if_any_nan(x) for x in df[ac].values
+                    none_if_any_nan(x) for x in df[ac].to_numpy()
                 ]  # make list of numpy arrays, or None if there are any NaNs in the array
             else:
-                df[c] = [x for x in df[ac].values]  # make list of numpy arrays
+                df[c] = list(df[ac].to_numpy())  # make list of numpy arrays
         else:
             df[c] = None
 
@@ -149,14 +159,17 @@ def read_file(
             raise ValueError("None of the specified suffixes were found, can't continue")
 
     if as_list_dict:
-        obj_list = [object(**kwargs) for kwargs in df.to_dict(orient="records")]
+        obj_list = [record_class(**kwargs) for kwargs in df.to_dict(orient="records")]
 
         # organize into dict by frame index
         objs = {}
-        for k, v in zip(df[subset_var], obj_list):
+        for k, v in zip(df[subset_var], obj_list, strict=True):
             objs.setdefault(k, []).append(v)
     else:
-        objs = {idx: object(**kwargs) for idx, kwargs in zip(df[subset_var], df.to_dict(orient="records"))}
+        objs = {
+            idx: record_class(**kwargs)
+            for idx, kwargs in zip(df[subset_var], df.to_dict(orient="records"), strict=True)
+        }
     return objs, df[subset_var].max()
 
 
@@ -164,9 +177,10 @@ def write_array_to_file(
     objects: list[Any] | dict[int, list[Any]],
     file_name: str | pathlib.Path,
     cols_compressed: dict[str, int],
-    drop_all_nan_cols: list[str] = None,
+    drop_all_nan_cols: list[str] | None = None,
     skip_all_nan: bool = False,
-):
+) -> None:
+    """Write a collection of data objects to a tab-separated file."""
     if not objects:
         return
 
@@ -182,20 +196,20 @@ def write_array_to_file(
 
     # unpack array columns
     cols_uncompressed = uncompress_columns(cols_compressed)
-    for c, ac in zip(cols_compressed, cols_uncompressed):
+    for c, ac in zip(cols_compressed, cols_uncompressed, strict=True):
         if len(ac) > 1:
-            df[ac] = np.vstack([all_nan_if_none(v, len(ac)).flatten() for v in df[c].values])
+            df[ac] = np.vstack([all_nan_if_none(v, len(ac)).flatten() for v in df[c].to_numpy()])
 
     # if wanted, drop specific columns for which all rows are nan
     if drop_all_nan_cols:
-        df = df.drop([c for c in drop_all_nan_cols if c in df and df[c].isnull().all()], axis="columns")
+        df = df.drop([c for c in drop_all_nan_cols if c in df and df[c].isna().all()], axis="columns")
 
     # if we have filled _ori timestamp and frame_idx columns, copy them back into plain timestamp
     # and frame_idx columns. NB: the _ori columns will be removed because they're not listed in
     # the possible file columns
-    if "timestamp_ori" in df.columns and not df["timestamp_ori"].isnull().all():
+    if "timestamp_ori" in df.columns and not df["timestamp_ori"].isna().all():
         df["timestamp"] = df["timestamp_ori"]
-    if "frame_idx_ori" in df.columns and not df["frame_idx_ori"].isnull().all():
+    if "frame_idx_ori" in df.columns and not df["frame_idx_ori"].isna().all():
         df["frame_idx"] = df["frame_idx_ori"]
 
     # keep only columns to be written out and order them correctly

@@ -1,3 +1,5 @@
+"""Standard file and prefix names used across the glassesTools pipeline."""
+
 gaze_data_fname = "gazeData.tsv"
 frame_timestamps_fname = "frameTimestamps.tsv"
 scene_camera_video_fname_stem = "worldCamera"

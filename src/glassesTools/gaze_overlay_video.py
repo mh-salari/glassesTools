@@ -63,7 +63,7 @@ class VideoMaker:
         self.world_pos_thickness: int = -1
 
         # set up output video
-        self._fps = 1000 / self.video_ts.get_IFI()
+        self._fps = 1000 / self.video_ts.get_ifi()
         self._res = (
             int(self.video.get_prop(cv2.CAP_PROP_FRAME_HEIGHT)),
             int(self.video.get_prop(cv2.CAP_PROP_FRAME_WIDTH)),

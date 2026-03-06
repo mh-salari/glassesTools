@@ -1,8 +1,13 @@
-# intervals are either lists of lists ([1,2], [100,200]), or dicts containing such lists as values
+"""Utilities for checking frame membership in annotation intervals.
+
+Intervals are either lists of lists ([1,2], [100,200]), or dicts containing such lists as values.
+"""
+
 from . import annotation
 
 
 def is_in_interval(frame_idx: int, intervals: tuple[annotation.EventType, list[int] | list[list[int]]]) -> bool:
+    """Return True if *frame_idx* falls within any of the given intervals."""
     if intervals is None:
         return True  # no interval defined, that means all frames should be processed
 
@@ -18,8 +23,9 @@ def is_in_interval(frame_idx: int, intervals: tuple[annotation.EventType, list[i
 
 
 def which_interval(
-    frame_idx, intervals: dict[str, tuple[annotation.EventType, list[int] | list[list[int]]]]
+    frame_idx: int, intervals: dict[str, tuple[annotation.EventType, list[int] | list[list[int]]]]
 ) -> tuple[list[str] | None, list[list[int]] | None]:
+    """Return the annotation keys and interval bounds that contain *frame_idx*."""
     if not isinstance(intervals, dict) or not intervals:
         return None, None
     # prep input
@@ -42,19 +48,23 @@ def which_interval(
     return keys, ivals
 
 
-def beyond_last_interval(frame_idx, intervals: dict[str, tuple[annotation.EventType, list[int] | list[list[int]]]]):
+def beyond_last_interval(
+    frame_idx: int, intervals: dict[str, tuple[annotation.EventType, list[int] | list[list[int]]]]
+) -> bool:
+    """Return True if *frame_idx* is past all defined intervals."""
     if not intervals:
         return False
     if isinstance(intervals, dict):
-        for k in intervals:
-            if intervals[k] is None:
+        for iv_val in intervals.values():
+            if iv_val is None:
                 # None indicates all frames should be processed
                 return False
-            if not intervals[k][1]:
+            if not iv_val[1]:
                 return False
-            if isinstance(intervals[k][1][-1], list):
-                if frame_idx <= intervals[k][1][-1][-1]:
+            if isinstance(iv_val[1][-1], list):
+                if frame_idx <= iv_val[1][-1][-1]:
                     return False
-            elif frame_idx <= intervals[k][1][-1]:
+            elif frame_idx <= iv_val[1][-1]:
                 return False
         return True
+    return False

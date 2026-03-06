@@ -1,4 +1,8 @@
-# NB: using pose information requires a calibrated scene camera
+"""Data types for gaze angle computation methods.
+
+NB: using pose information requires a calibrated scene camera.
+"""
+
 import enum
 import math
 import typing
@@ -9,8 +13,9 @@ from . import gaze_worldref, json, pose, transforms
 from . import utils as _utils
 
 
-# type of data to use for computing angular measures
 class DataType(_utils.AutoName):
+    """Type of data to use for computing angular measures."""
+
     viewpos_vidpos_homography = enum.auto()  # use homography to map gaze from video to plane, and viewing distance defined in config (combined with the assumptions that the viewing position (eye) is located directly in front of the plane's center and that the plane is oriented perpendicularly to the line of sight) to compute angular measures
     pose_vidpos_homography = (
         enum.auto()
@@ -27,12 +32,13 @@ class DataType(_utils.AutoName):
         enum.auto()
     )  # report average of left (pose_left_eye) and right (pose_right_eye) eye angular values
 
-    # so this gets serialized in a user-friendly way by pandas..
-    def __str__(self):
+    def __str__(self) -> str:
+        """Return the name so pandas serializes this in a user-friendly way."""
         return self.name
 
 
 def data_type_val_to_enum_val(x: int | str) -> DataType:
+    """Convert an integer or string to the corresponding DataType enum value."""
     return _utils.str_int_2_enum_val(
         x,
         DataType,
@@ -59,81 +65,100 @@ json.register_type(
 )
 
 
-def get_explanation(dq: DataType):
+def get_explanation(dq: DataType) -> tuple[str, str]:
+    """Return a short name and a detailed description for the given data type."""
     ler_name = "Left eye ray + pose"
     rer_name = "Right eye ray + pose"
     match dq:
         case DataType.viewpos_vidpos_homography:
             return (
                 "Homography + view distance",
-                "Use homography to map gaze position from the scene video to "
-                "the validation plane, and use an assumed viewing distance (see "
-                "the project's configuration) to compute angular measures "
-                "in degrees with respect to the scene camera. In this mode, it is "
-                "assumed that the eye is located exactly in front of the center of "
-                "the plane and that the plane is oriented perpendicularly to the "
-                "line of sight from this assumed viewing position.",
+                (
+                    "Use homography to map gaze position from the scene video to "
+                    "the validation plane, and use an assumed viewing distance (see "
+                    "the project's configuration) to compute angular measures "
+                    "in degrees with respect to the scene camera. In this mode, it is "
+                    "assumed that the eye is located exactly in front of the center of "
+                    "the plane and that the plane is oriented perpendicularly to the "
+                    "line of sight from this assumed viewing position."
+                ),
             )
         case DataType.pose_vidpos_homography:
             return (
                 "Homography + pose",
-                "Use homography to map gaze position from the scene video to "
-                "the validation plane, and use the determined pose of the scene "
-                "camera (requires a calibrated camera) to compute angular "
-                "measures in degrees with respect to the scene camera.",
+                (
+                    "Use homography to map gaze position from the scene video to "
+                    "the validation plane, and use the determined pose of the scene "
+                    "camera (requires a calibrated camera) to compute angular "
+                    "measures in degrees with respect to the scene camera."
+                ),
             )
         case DataType.pose_vidpos_ray:
             return (
                 "Video ray + pose",
-                "Use camera calibration to turn gaze position from the scene "
-                "video into a direction vector, and determine gaze position on "
-                "the validation plane by intersecting this vector with the "
-                "plane. Then, use the determined pose of the scene camera "
-                "(requires a calibrated camera) to compute angular "
-                "measures in degrees with respect to the scene camera.",
+                (
+                    "Use camera calibration to turn gaze position from the scene "
+                    "video into a direction vector, and determine gaze position on "
+                    "the validation plane by intersecting this vector with the "
+                    "plane. Then, use the determined pose of the scene camera "
+                    "(requires a calibrated camera) to compute angular "
+                    "measures in degrees with respect to the scene camera."
+                ),
             )
         case DataType.pose_world_eye:
             return (
                 "World gaze position + pose",
-                "Use the gaze position in the world provided by the eye tracker "
-                "(often a binocular gaze point) to determine gaze position on the "
-                "validation plane by turning it into a direction vector with respect "
-                "to the scene camera and intersecting this vector with the plane. "
-                "Then, use the determined pose of the scene camera "
-                "(requires a calibrated camera) to compute angular "
-                "measures in degrees with respect to the scene camera.",
+                (
+                    "Use the gaze position in the world provided by the eye tracker "
+                    "(often a binocular gaze point) to determine gaze position on the "
+                    "validation plane by turning it into a direction vector with respect "
+                    "to the scene camera and intersecting this vector with the plane. "
+                    "Then, use the determined pose of the scene camera "
+                    "(requires a calibrated camera) to compute angular "
+                    "measures in degrees with respect to the scene camera."
+                ),
             )
         case DataType.pose_left_eye:
             return (
                 ler_name,
-                "Use the gaze direction vector for the left eye provided by "
-                "the eye tracker to determine gaze position on the validation "
-                "plane by intersecting this vector with the plane. "
-                "Then, use the determined pose of the scene camera "
-                "(requires a camera calibration) to compute angular "
-                "measures in degrees with respect to the left eye.",
+                (
+                    "Use the gaze direction vector for the left eye provided by "
+                    "the eye tracker to determine gaze position on the validation "
+                    "plane by intersecting this vector with the plane. "
+                    "Then, use the determined pose of the scene camera "
+                    "(requires a camera calibration) to compute angular "
+                    "measures in degrees with respect to the left eye."
+                ),
             )
         case DataType.pose_right_eye:
             return (
                 rer_name,
-                "Use the gaze direction vector for the right eye provided by "
-                "the eye tracker to determine gaze position on the validation "
-                "plane by intersecting this vector with the plane. "
-                "Then, use the determined pose of the scene camera "
-                "(requires a camera calibration) to compute angular "
-                "measures in degrees with respect to the right eye.",
+                (
+                    "Use the gaze direction vector for the right eye provided by "
+                    "the eye tracker to determine gaze position on the validation "
+                    "plane by intersecting this vector with the plane. "
+                    "Then, use the determined pose of the scene camera "
+                    "(requires a camera calibration) to compute angular "
+                    "measures in degrees with respect to the right eye."
+                ),
             )
         case DataType.pose_left_right_avg:
             return (
                 "Average eye rays + pose",
-                "For each time point, take angular offset between the left and "
-                "right gaze positions and the fixation target and average them "
-                "to compute angular measures in degrees. Requires "
-                f"'{ler_name}' and '{rer_name}' to be enabled.",
+                (
+                    "For each time point, take angular offset between the left and "
+                    "right gaze positions and the fixation target and average them "
+                    "to compute angular measures in degrees. Requires "
+                    f"'{ler_name}' and '{rer_name}' to be enabled."
+                ),
             )
 
 
 def get_world_gaze_fields_for_data_type(angle_type: DataType) -> list[str | None]:
+    """Return the gaze field names [origin, 3D point, 2D plane point] for a data type.
+
+    Each element is None if not available for the given type.
+    """
     # field 1: origin of gaze vector (None if scene camera)
     # field 2: 3D gaze point in camera space (None if not available)
     # field 3: 2D gaze point on plane in plane space
@@ -162,6 +187,7 @@ def get_world_gaze_fields_for_data_type(angle_type: DataType) -> list[str | None
 
 
 def get_available_data_types(plane_gazes: dict[int, list[gaze_worldref.Gaze]]) -> list[DataType]:
+    """Determine which data types have sufficient data in the provided plane gazes."""
     dq_have: list[DataType] = []
     for dq in DataType:
         if dq == DataType.pose_left_right_avg:
@@ -187,12 +213,9 @@ def select_data_types_to_use(
     dq_have: list[DataType],
     allow_dq_fallback: bool = True,
 ) -> list[DataType]:
+    """Select which data types to use, validating against available types and applying fallback logic."""
     if dq_types is not None:
-        if isinstance(dq_types, DataType) or isinstance(dq_types, str):
-            dq_types = [dq_types]
-        else:
-            # ensure list
-            dq_types = list(dq_types)
+        dq_types = [dq_types] if isinstance(dq_types, (DataType, str)) else list(dq_types)
 
     if dq_types:
         # do some checks on user input
@@ -200,16 +223,16 @@ def select_data_types_to_use(
             if not isinstance(dq, DataType):
                 if isinstance(dq, str):
                     if hasattr(DataType, dq):
-                        dq = dq_types[i] = getattr(DataType, dq)
+                        dq_types[i] = getattr(DataType, dq)
                     else:
                         raise ValueError(
                             f"The string '{dq}' is not a known data type. Known types: {[e.name for e in DataType]}"
                         )
                 else:
-                    raise ValueError(
+                    raise TypeError(
                         f"The variable 'dq' should be a string with one of the following values: {[e.name for e in DataType]}"
                     )
-            if dq not in dq_have:
+            if dq_types[i] not in dq_have:
                 if allow_dq_fallback:
                     del dq_types[i]
                 else:
@@ -217,14 +240,15 @@ def select_data_types_to_use(
                         f"Data type {dq} could not be used as its not available for this recording. Available data types: {[e.name for e in dq_have]}"
                     )
 
-        if DataType.pose_left_right_avg in dq_types:
-            if (DataType.pose_left_eye not in dq_have) or (DataType.pose_right_eye not in dq_have):
-                if allow_dq_fallback:
-                    dq_types.remove(DataType.pose_left_right_avg)
-                else:
-                    raise RuntimeError(
-                        f"Cannot use the data type {DataType.pose_left_right_avg} because it requires having data types {DataType.pose_left_eye} and {DataType.pose_right_eye} available, but one or both are not available. Available data types: {[e.name for e in dq_have]}"
-                    )
+        if DataType.pose_left_right_avg in dq_types and (
+            (DataType.pose_left_eye not in dq_have) or (DataType.pose_right_eye not in dq_have)
+        ):
+            if allow_dq_fallback:
+                dq_types.remove(DataType.pose_left_right_avg)
+            else:
+                raise RuntimeError(
+                    f"Cannot use the data type {DataType.pose_left_right_avg} because it requires having data types {DataType.pose_left_eye} and {DataType.pose_right_eye} available, but one or both are not available. Available data types: {[e.name for e in dq_have]}"
+                )
 
     if not dq_types:
         if DataType.pose_vidpos_ray in dq_have:
@@ -252,18 +276,19 @@ def calculate_gaze_angles_to_point(
     points_for_homography: dict[int, np.ndarray] | None = None,
     viewing_distance: float | None = None,
 ) -> tuple[list[int], np.ndarray, dict[int, dict[DataType, np.ndarray]]]:
+    """Compute angular offsets between gaze and target points for each data type."""
     # collect needed data
     out: dict[int, dict[DataType, np.ndarray]] = {}
     frame_idxs = None
     timestamps = None
-    for t in points:
+    for t, point_val in points.items():
         points_cam_space: dict[int, np.ndarray] = {}
         out[t] = {}
         for d_type in d_types:
             if d_type == DataType.pose_left_right_avg:
                 continue  # special case handled below
             # get data
-            fr_idxs, ts, ori, gaze, gazePlane = collect_gaze_data(plane_gazes, d_type, viewing_distance)
+            fr_idxs, ts, ori, gaze, gaze_plane = collect_gaze_data(plane_gazes, d_type, viewing_distance)
             if frame_idxs is None:
                 frame_idxs = fr_idxs
             if timestamps is None:
@@ -274,24 +299,24 @@ def calculate_gaze_angles_to_point(
             for i, f_idx in enumerate(fr_idxs):
                 if d_type == DataType.viewpos_vidpos_homography:
                     # get vectors based on assumed viewing distance (from config), without using pose info
-                    vGaze = gaze[i, :]
-                    vTarget = points_for_homography[t]
+                    v_gaze = gaze[i, :]
+                    v_target = points_for_homography[t]
                 else:
                     # use 3D vectors known given pose information
                     if f_idx not in poses:
                         continue
                     if f_idx not in points_cam_space:
-                        points_cam_space[f_idx] = poses[f_idx].world_frame_to_cam(points[t])
+                        points_cam_space[f_idx] = poses[f_idx].world_frame_to_cam(point_val)
 
                     # get vectors from origin to target and to gaze point
-                    vGaze = gaze[i, :] - ori[i, :]
-                    vTarget = points_cam_space[f_idx] - ori[i, :]
+                    v_gaze = gaze[i, :] - ori[i, :]
+                    v_target = points_cam_space[f_idx] - ori[i, :]
 
                 # get offset
-                ang2D = transforms.angle_between(vTarget, vGaze)
+                ang_2d = transforms.angle_between(v_target, v_gaze)
                 # decompose in horizontal/vertical (in plane space)
-                onPlaneAngle = math.atan2(gazePlane[i, 1] - points[t][1], gazePlane[i, 0] - points[t][0])
-                out[t][d_type][i, :] = ang2D * np.array([1.0, math.cos(onPlaneAngle), math.sin(onPlaneAngle)])
+                on_plane_angle = math.atan2(gaze_plane[i, 1] - point_val[1], gaze_plane[i, 0] - point_val[0])
+                out[t][d_type][i, :] = ang_2d * np.array([1.0, math.cos(on_plane_angle), math.sin(on_plane_angle)])
 
         # special case for average of left and right eye
         if DataType.pose_left_right_avg in d_types:
@@ -306,6 +331,7 @@ def calculate_gaze_angles_to_point(
 def collect_gaze_data(
     plane_gazes: dict[int, list[gaze_worldref.Gaze]], d_type: DataType, viewing_distance: float | None = None
 ) -> tuple[list[int], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Collect and stack gaze origin, direction, and plane position arrays for a data type."""
     if d_type == DataType.viewpos_vidpos_homography and viewing_distance is None:
         raise ValueError(
             f"When using data type {DataType.viewpos_vidpos_homography}, a viewing distance (in mm) should be provided."
@@ -319,12 +345,12 @@ def collect_gaze_data(
         ori = np.zeros((len(ts), 3))
     else:
         ori = np.vstack([getattr(s, fields[0]) for v in plane_gazes.values() for s in v])
-    gazePlane = np.vstack([getattr(s, fields[2]) for v in plane_gazes.values() for s in v])
+    gaze_plane = np.vstack([getattr(s, fields[2]) for v in plane_gazes.values() for s in v])
     if fields[1] is None:
         if not d_type == DataType.viewpos_vidpos_homography:
             raise NotImplementedError("This field should be set, is a special case not implemented? Contact developer")
-        gaze = np.hstack((gazePlane[:, 0:2], np.full((gazePlane.shape[0], 1), viewing_distance)))
+        gaze = np.hstack((gaze_plane[:, 0:2], np.full((gaze_plane.shape[0], 1), viewing_distance)))
     else:
         gaze = np.vstack([getattr(s, fields[1]) for v in plane_gazes.values() for s in v])
 
-    return frame_idxs, ts, ori, gaze, gazePlane
+    return frame_idxs, ts, ori, gaze, gaze_plane

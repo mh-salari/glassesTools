@@ -155,3 +155,4 @@ lint.ignore = [
 [tool.ruff.lint.per-file-ignores]
 "src/glassesTools/__init__.py" = ["RUF067"]  # ffmpeg path setup must run at import time
 "src/glassesTools/json.py" = ["ANN401"]  # JSON serialization legitimately uses typing.Any
+"src/glassesTools/data_files.py" = ["ANN401", "SLF001"]  # record_class accepts any class; accesses internal _columns_compressed etc. by design
