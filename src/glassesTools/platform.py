@@ -1,8 +1,12 @@
+"""Platform detection utilities for identifying the current operating system."""
+
 import enum
 import sys
 
 
 class Os(enum.Enum):
+    """Supported operating systems."""
+
     Windows = enum.auto()
     MacOS = enum.auto()
     Linux = enum.auto()
