@@ -1,6 +1,0 @@
-include requirements.txt
-include src/glassesTools/validation/default_poster/markerPositions.csv
-include src/glassesTools/validation/default_poster/targetPositions.csv
-include src/glassesTools/validation/default_poster/validationSetup.txt
-include src/glassesTools/validation/default_poster/poster.pdf
-include src/glassesTools/validation/default_poster/poster.tex

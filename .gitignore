@@ -42,6 +42,9 @@ wheels/
 *.egg
 MANIFEST
 
+# uv
+uv.lock
+
 # IDEs
 .idea/
 .vs/
