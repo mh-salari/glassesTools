@@ -1,3 +1,6 @@
+"""Marker data types, pose storage, detection analysis, and formatting utilities."""
+
+import operator
 import pathlib
 import typing
 from collections import defaultdict
@@ -9,24 +12,27 @@ from . import data_files, drawing, json, naming, ocv
 
 
 class MarkerID(typing.NamedTuple):
+    """Identifier for an ArUco marker combining its ID and dictionary."""
+
     m_id: int
     aruco_dict_id: int
 
 
-def marker_ID_to_str(m: MarkerID):
-    from . import aruco
+def marker_id_to_str(m: MarkerID) -> str:
+    """Return a human-readable string for a MarkerID."""
+    from . import aruco  # noqa: PLC0415
 
     return f"{m.m_id} ({aruco.dict_id_to_str[m.aruco_dict_id]})"
 
 
-def _serialize_marker_id(m: MarkerID):
-    from . import aruco
+def _serialize_marker_id(m: MarkerID) -> dict[str, str | int]:
+    from . import aruco  # noqa: PLC0415
 
     return {"m_id": m.m_id, "aruco_dict": aruco.dict_id_to_str[m.aruco_dict_id]}
 
 
-def _deserialize_marker_id(m: dict[str, str | int]):
-    from . import aruco
+def _deserialize_marker_id(m: dict[str, str | int]) -> MarkerID:
+    from . import aruco  # noqa: PLC0415
 
     return MarkerID(
         m_id=m["m_id"],
@@ -38,38 +44,48 @@ json.register_type(json.TypeEntry(MarkerID, "__config.MarkerID__", _serialize_ma
 
 
 class Marker:
+    """A detected or defined marker with center, corners, color, and rotation."""
+
     def __init__(
-        self, key: int, center: np.ndarray, corners: list[np.ndarray] = None, color: str = None, rot: float = 0.0
-    ):
+        self,
+        key: int,
+        center: np.ndarray,
+        corners: list[np.ndarray] | None = None,
+        color: str | None = None,
+        rot: float = 0.0,
+    ) -> None:
+        """Initialize a Marker with its key, center position, and optional properties."""
         self.key = key
         self.center = center
         self.corners = corners
         self.color = color
         self.rot = rot
 
-    def __str__(self):
-        ret = "[%d]: center @ (%.2f, %.2f), rot %.0f deg" % (self.key, self.center[0], self.center[1], self.rot)
-        return ret
+    def __str__(self) -> str:
+        """Return a human-readable string describing the marker."""
+        return f"[{self.key}]: center @ ({self.center[0]:.2f}, {self.center[1]:.2f}), rot {self.rot:.0f} deg"
 
-    def shift(self, offset: np.ndarray):
+    def shift(self, offset: np.ndarray) -> None:
+        """Shift marker center and corners by the given offset."""
         self.center += offset
         if self.corners:
             for c in self.corners:
-                c += offset
+                c += offset  # noqa: PLW2901
 
 
-def corners_intersection(corners):
+def corners_intersection(corners: np.ndarray) -> np.ndarray:
+    """Compute the intersection point of the two diagonals of a quadrilateral."""
     line1 = (corners[0], corners[2])
     line2 = (corners[1], corners[3])
     xdiff = (line1[0][0] - line1[1][0], line2[0][0] - line2[1][0])
     ydiff = (line1[0][1] - line1[1][1], line2[0][1] - line2[1][1])
 
-    def det(a, b):
+    def det(a: tuple[float, float], b: tuple[float, float]) -> float:
         return a[0] * b[1] - a[1] * b[0]
 
     div = det(xdiff, ydiff)
     if div == 0:
-        raise Exception("lines do not intersect")
+        raise ValueError("lines do not intersect")
 
     d = (det(*line1), det(*line2))
     x = det(d, xdiff) / div
@@ -78,34 +94,43 @@ def corners_intersection(corners):
 
 
 class Pose:
-    # description of tsv file used for storage
-    _columns_compressed = {"frame_idx": 1, "R_vec": 3, "T_vec": 3}
-    _non_float = {"frame_idx": int}
+    """Marker pose (rotation and translation vectors) for a single frame."""
 
-    def __init__(self, frame_idx: int, R_vec: np.ndarray = None, T_vec: np.ndarray = None):
+    _columns_compressed: typing.ClassVar[dict[str, int]] = {"frame_idx": 1, "R_vec": 3, "T_vec": 3}
+    _non_float: typing.ClassVar[dict[str, type]] = {"frame_idx": int}
+
+    def __init__(self, frame_idx: int, R_vec: np.ndarray | None = None, T_vec: np.ndarray | None = None) -> None:
+        """Initialize a Pose with frame index and optional rotation/translation vectors."""
         self.frame_idx: int = frame_idx
-        self.R_vec: np.ndarray = R_vec
-        self.T_vec: np.ndarray = T_vec
+        self.R_vec: np.ndarray | None = R_vec
+        self.T_vec: np.ndarray | None = T_vec
 
-    def pose_successful(self):
+    def pose_successful(self) -> bool:
+        """Return True if both rotation and translation vectors are available."""
         return self.R_vec is not None and self.T_vec is not None
 
-    def draw_frame_axis(self, frame, camera_params: ocv.CameraParams, arm_length, sub_pixel_fac=8):
+    def draw_frame_axis(
+        self, frame: np.ndarray, camera_params: ocv.CameraParams, arm_length: float, sub_pixel_fac: int = 8
+    ) -> None:
+        """Draw the pose coordinate axes on a video frame."""
         if not camera_params.has_intrinsics():
             return
-        drawing.openCVFrameAxis(frame, camera_params, self.R_vec, self.T_vec, arm_length, 3, sub_pixel_fac)
+        drawing.opencv_frame_axis(frame, camera_params, self.R_vec, self.T_vec, arm_length, 3, sub_pixel_fac)
 
 
-def read_dict_from_file(fileName: str | pathlib.Path, episodes: list[list[int]] = None) -> dict[int, Pose]:
-    return data_files.read_file(fileName, Pose, True, True, False, False, episodes=episodes)[0]
+def read_dict_from_file(file_name: str | pathlib.Path, episodes: list[list[int]] | None = None) -> dict[int, Pose]:
+    """Read marker poses from a TSV file into a dictionary keyed by frame index."""
+    return data_files.read_file(file_name, Pose, True, True, False, False, episodes=episodes)[0]
 
 
-def write_list_to_file(poses: list[Pose], fileName: str | pathlib.Path, skip_failed=False):
-    data_files.write_array_to_file(poses, fileName, Pose._columns_compressed, skip_all_nan=skip_failed)
+def write_list_to_file(poses: list[Pose], file_name: str | pathlib.Path, skip_failed: bool = False) -> None:
+    """Write a list of marker poses to a TSV file."""
+    data_files.write_array_to_file(poses, file_name, Pose._columns_compressed, skip_all_nan=skip_failed)
 
 
 def get_file_name(marker_id: int, aruco_dict_id: int, folder: str | pathlib.Path | None) -> pathlib.Path:
-    from . import aruco
+    """Build the TSV file path for a marker's pose data."""
+    from . import aruco  # noqa: PLC0415
 
     file_name = f"{naming.marker_pose_prefix}{aruco.dict_id_to_str[aruco_dict_id]}_{marker_id}.tsv"
     if folder is None:
@@ -115,18 +140,21 @@ def get_file_name(marker_id: int, aruco_dict_id: int, folder: str | pathlib.Path
 
 
 def read_dataframe_from_file(marker_id: int, aruco_dict_id: int, folder: str | pathlib.Path) -> pd.DataFrame:
+    """Read a marker pose TSV file into a pandas DataFrame."""
     file = get_file_name(marker_id, aruco_dict_id, folder)
     return pd.read_csv(file, sep="\t", dtype=defaultdict(lambda: float, **Pose._non_float))
 
 
 @typing.overload
-def code_for_presence(markers: pd.DataFrame, allow_failed=False) -> pd.DataFrame: ...
+def code_for_presence(markers: pd.DataFrame, allow_failed: bool = False) -> pd.DataFrame: ...
+@typing.overload
 def code_for_presence(
-    markers: dict[typing.Any, pd.DataFrame], allow_failed=False
+    markers: dict[typing.Any, pd.DataFrame], allow_failed: bool = False
 ) -> dict[typing.Any, pd.DataFrame]: ...
 def code_for_presence(
-    markers: pd.DataFrame | dict[typing.Any, pd.DataFrame], allow_failed=False
+    markers: pd.DataFrame | dict[typing.Any, pd.DataFrame], allow_failed: bool = False
 ) -> pd.DataFrame | dict[typing.Any, pd.DataFrame]:
+    """Add a boolean presence column to marker DataFrames."""
     if isinstance(markers, dict):
         for i in markers:
             markers[i] = _code_for_presence_impl(markers[i], f"{i}_", allow_failed)
@@ -135,21 +163,22 @@ def code_for_presence(
     return markers
 
 
-def _code_for_presence_impl(markers: pd.DataFrame, lbl_extra: str, allow_failed=False) -> pd.DataFrame:
+def _code_for_presence_impl(markers: pd.DataFrame, lbl_extra: str, allow_failed: bool = False) -> pd.DataFrame:
     new_col_lbl = f"marker_{lbl_extra}presence"
     markers.insert(
         len(markers.columns),
         new_col_lbl,
         True
         if allow_failed
-        else markers[[c for c in markers.columns if c not in ["frame_idx"]]].notnull().all(axis="columns"),
+        else markers[[c for c in markers.columns if c != "frame_idx"]].notna().all(axis="columns"),
     )
     markers = markers[["frame_idx", new_col_lbl]] if "frame_idx" in markers else markers[[new_col_lbl]]
     markers = markers.astype({new_col_lbl: bool})  # ensure the new column is bool
     return markers
 
 
-def expand_detection(markers: pd.DataFrame, fill_value):
+def expand_detection(markers: pd.DataFrame, fill_value: typing.Any) -> pd.DataFrame:  # noqa: ANN401
+    """Expand a marker detection DataFrame to cover all frames in its range."""
     if "frame_idx" in markers.columns:
         min_fr_idx = markers["frame_idx"].min()
         max_fr_idx = markers["frame_idx"].max()
@@ -165,8 +194,11 @@ def expand_detection(markers: pd.DataFrame, fill_value):
     return markers.reindex(new_index, fill_value=fill_value)
 
 
-def get_appearance_starts_ends(m: pd.DataFrame, max_gap_duration: int, min_duration: int):
-    vals = np.pad(m["marker_presence"].values.astype(int), (1, 1), "constant", constant_values=(0, 0))
+def get_appearance_starts_ends(
+    m: pd.DataFrame, max_gap_duration: int, min_duration: int
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Find start and end frame indices of marker appearance intervals."""
+    vals = np.pad(m["marker_presence"].to_numpy().astype(int), (1, 1), "constant", constant_values=(0, 0))
     d = np.diff(vals)
     starts = np.nonzero(d == 1)[0]
     ends = np.nonzero(d == -1)[0]
@@ -188,6 +220,7 @@ def get_appearance_starts_ends(m: pd.DataFrame, max_gap_duration: int, min_durat
         )  # NB: -1 so that ends point to last frame during which marker was last seen (and to not index out of the array)
     if m.index.name == "frame_idx":
         return m.index[starts].to_numpy(copy=True), m.index[ends - 1].to_numpy(copy=True)
+    return None
 
 
 def get_sequence_interval(
@@ -195,9 +228,9 @@ def get_sequence_interval(
     ends: dict[MarkerID, list[int]],
     pattern: list[MarkerID],
     max_intermarker_gap_duration: int,
-    side="start",
+    side: str = "start",
 ) -> np.ndarray:
-    # find marker pattern (sequence of markers following in right order with gap no longer than max_intermarker_gap_duration)
+    """Find intervals matching a marker sequence pattern with bounded inter-marker gaps."""
     pairs: list[tuple[int, int]] = []
     for i in range(len(ends[pattern[0]])):
         end_idx = i
@@ -214,7 +247,8 @@ def get_sequence_interval(
     return np.array([p[idx] for p in pairs])
 
 
-def get_smallest_gap_end(gaps: np.ndarray, max_intermarker_gap_duration: int):
+def get_smallest_gap_end(gaps: np.ndarray, max_intermarker_gap_duration: int) -> int | None:
+    """Return the index of the smallest valid gap, or None if no gap qualifies."""
     gapi = np.nonzero(np.logical_and(gaps >= 0, gaps <= max_intermarker_gap_duration))[0]
     if gapi.size:
         # if there are multiple that qualify, take the smallest gap
@@ -223,8 +257,9 @@ def get_smallest_gap_end(gaps: np.ndarray, max_intermarker_gap_duration: int):
     return None
 
 
-def format_duplicate_markers_msg(markers: set[tuple[int, int]]):
-    from . import aruco
+def format_duplicate_markers_msg(markers: set[tuple[int, int]]) -> str:
+    """Format a human-readable message listing duplicate markers grouped by dictionary."""
+    from . import aruco  # noqa: PLC0415
 
     # NB: input should be dictionary families, not dicts themselves
     # organize per dictionary family
@@ -248,16 +283,17 @@ def format_duplicate_markers_msg(markers: set[tuple[int, int]]):
     return out
 
 
-def format_marker_sequence_msg(marker_set: list[tuple[int, int]]):
-    from . import aruco
+def format_marker_sequence_msg(marker_set: list[tuple[int, int]]) -> str:
+    """Format a human-readable message for a sequence of markers."""
+    from . import aruco  # noqa: PLC0415
 
     # NB: input should be dictionary families, not dicts themselves
     # turn each dict into a string/family
     marker_set_str: list[tuple[str, bool, int]] = []
-    all_same_family_or_dict = len(set(x[0] for x in marker_set)) == 1
-    marker_set.sort(key=lambda x: x[0])
+    all_same_family_or_dict = len({x[0] for x in marker_set}) == 1
+    marker_set.sort(key=operator.itemgetter(0))
     if not all_same_family_or_dict:
-        marker_set.sort(key=lambda x: x[1])
+        marker_set.sort(key=operator.itemgetter(1))
     for m in marker_set:
         d_str, is_family = aruco.family_to_str[m[1]]
         marker_set_str.append((d_str, is_family, m[0]))

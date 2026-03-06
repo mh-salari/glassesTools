@@ -148,6 +148,7 @@ lint.ignore = [
     "PLR0913", #Too many arguments
     "PLR0917", #Too many arguments
     "PLR0914", #Too many local variables
+    "PLR0916", #Too many Boolean expressions
     "INP001", # Flake8-no-pep420 - Implicit namespace package (requires __init__.py)
     "N999",  # PEP8 Naming - Invalid module name (package uses camelCase by design)
 ]
@@ -158,4 +159,7 @@ lint.ignore = [
 "src/glassesTools/data_files.py" = ["ANN401", "SLF001"]  # record_class accepts any class; accesses internal _columns_compressed etc. by design
 "src/glassesTools/gaze_headref.py" = ["N803", "SLF001"]  # param names must match TSV column names (e.g. timestamp_VOR); accesses own class _columns_*
 "src/glassesTools/gaze_worldref.py" = ["N803", "SLF001"]  # param names must match TSV column names; accesses own class _columns_*
+"src/glassesTools/aruco.py" = ["N803"]  # ArUco is a proper name, keep casing in param names (ArUco_dict_id, ArUco_dict)
 "src/glassesTools/fixation_classification.py" = ["N803"]  # I2MC_settings_override uses library name
+"src/glassesTools/marker.py" = ["N803", "SLF001"]  # R_vec/T_vec match TSV columns; accesses _columns_compressed/_non_float
+"src/glassesTools/pose.py" = ["N803", "SLF001"]  # pose_R_vec/pose_T_vec/pose_N_points match TSV columns; accesses _columns_compressed

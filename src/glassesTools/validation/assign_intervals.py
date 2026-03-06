@@ -98,7 +98,7 @@ def dynamic_markers(
     # check we have data for at least one of the markers for a given target
     for t in marker_observations_per_target:
         if marker_observations_per_target[t].empty and not allow_missing:
-            missing_str = "\n- ".join([marker.marker_ID_to_str(m) for m in markers_per_target[t]])
+            missing_str = "\n- ".join([marker.marker_id_to_str(m) for m in markers_per_target[t]])
             extra = (
                 f"from frame {episode[0]} to frame {episode[1]}"
                 if name == ""

@@ -1,3 +1,5 @@
+"""Pose estimation, homography computation, and video-based pose processing."""
+
 import enum
 import pathlib
 import typing
@@ -9,8 +11,9 @@ from . import annotation, data_files, drawing, intervals, marker, ocv, timestamp
 
 
 class Pose:
-    # description of tsv file used for storage
-    _columns_compressed = {
+    """Camera pose and homography for a single frame relative to a plane."""
+
+    _columns_compressed: typing.ClassVar[dict[str, int]] = {
         "frame_idx": 1,
         "pose_N_points": 1,
         "pose_reprojection_error": 1,
@@ -19,9 +22,14 @@ class Pose:
         "homography_N_points": 1,
         "homography_mat": 9,
     }
-    _non_float = {"frame_idx": int, "pose_ok": bool, "pose_N_points": int, "homography_N_points": int}
+    _non_float: typing.ClassVar[dict[str, type]] = {
+        "frame_idx": int,
+        "pose_ok": bool,
+        "pose_N_points": int,
+        "homography_N_points": int,
+    }
     # backwards compatibility
-    _column_patches = {
+    _column_patches: typing.ClassVar[dict[str, tuple[str, typing.Callable[[int], int]]]] = {
         "pose_N_markers": ("pose_N_points", lambda x: x * 4),
         "homography_N_markers": ("homography_N_points", lambda x: x * 4),
     }
@@ -31,11 +39,12 @@ class Pose:
         frame_idx: int,
         pose_N_points: int = 0,
         pose_reprojection_error: float = -1.0,
-        pose_R_vec: np.ndarray = None,
-        pose_T_vec: np.ndarray = None,
+        pose_R_vec: np.ndarray | None = None,
+        pose_T_vec: np.ndarray | None = None,
         homography_N_points: int = 0,
-        homography_mat: np.ndarray = None,
-    ):
+        homography_mat: np.ndarray | None = None,
+    ) -> None:
+        """Initialize pose with frame index and optional pose/homography data."""
         self.frame_idx: int = frame_idx
         # pose
         self.pose_N_points: int = pose_N_points  # number of image points (4 per marker if based on ArUco markers) this pose estimate is based on. 0 if failed or otherwise not available
@@ -57,23 +66,34 @@ class Pose:
         self._RtMatInv = None
         self._i_homography_mat = None
 
-    def pose_successful(self):
+    def pose_successful(self) -> bool:
+        """Return whether a valid camera pose estimate is available."""
         return self.pose_N_points > 0
 
-    def homography_successful(self):
+    def homography_successful(self) -> bool:
+        """Return whether a valid homography estimate is available."""
         return self.homography_N_points > 0
 
     def draw_frame_axis(
-        self, img, camera_params: ocv.CameraParams, arm_length, thickness, sub_pixel_fac, position=[0.0, 0.0, 0.0]
-    ):
+        self,
+        img: np.ndarray,
+        camera_params: ocv.CameraParams,
+        arm_length: float,
+        thickness: int,
+        sub_pixel_fac: int,
+        position: list[float] | None = None,
+    ) -> None:
+        """Draw coordinate axes on the image at the estimated pose location."""
+        if position is None:
+            position = [0.0, 0.0, 0.0]
         if (self.pose_R_vec is None) or (self.pose_T_vec is None) or not camera_params.has_intrinsics():
             return
-        drawing.openCVFrameAxis(
+        drawing.opencv_frame_axis(
             img, camera_params, self.pose_R_vec, self.pose_T_vec, arm_length, thickness, sub_pixel_fac, position
         )
 
-    def cam_frame_to_world(self, point: np.ndarray):
-        # NB: world frame is in the plane's coordinate system
+    def cam_frame_to_world(self, point: np.ndarray) -> np.ndarray:
+        """Transform a point from camera frame to the plane's world frame."""
         if (self.pose_R_vec is None) or (self.pose_T_vec is None) or np.any(np.isnan(point)):
             return np.full((3,), np.nan)
 
@@ -86,8 +106,8 @@ class Pose:
 
         return np.matmul(self._RtMatInv, np.append(np.array(point), 1.0).reshape((4, 1))).flatten()
 
-    def world_frame_to_cam(self, point: np.ndarray):
-        # NB: world frame is in the plane's coordinate system
+    def world_frame_to_cam(self, point: np.ndarray) -> np.ndarray:
+        """Transform a point from the plane's world frame to camera frame."""
         if (self.pose_R_vec is None) or (self.pose_T_vec is None) or np.any(np.isnan(point)):
             return np.full((3,), np.nan)
 
@@ -99,7 +119,7 @@ class Pose:
         return np.matmul(self._RtMat, np.append(np.array(point), 1.0).reshape((4, 1))).flatten()
 
     def plane_to_cam_pose(self, point_plane: np.ndarray, camera_params: ocv.CameraParams) -> np.ndarray:
-        # from location on plane (2D) to location on camera image (2D)
+        """Project a 2D point on the plane to a 2D camera image location using pose."""
         if (self.pose_R_vec is None) or (self.pose_T_vec is None):
             return np.full((2,), np.nan)
         return transforms.project_points(
@@ -107,8 +127,7 @@ class Pose:
         ).flatten()
 
     def cam_to_plane_pose(self, point: np.ndarray, camera_params: ocv.CameraParams) -> tuple[np.ndarray, np.ndarray]:
-        # from location on camera image (2D) to location on plane (2D)
-        # NB: also returns intermediate result (intersection with plane in camera space)
+        """Project a 2D camera image point onto the plane using pose, returning plane coords and camera-space intersection."""
         if (
             (self.pose_R_vec is None)
             or (self.pose_T_vec is None)
@@ -117,17 +136,19 @@ class Pose:
         ):
             return np.full((2,), np.nan), np.full((3,), np.nan)
 
-        g3D = transforms.unproject_points(point, camera_params)
+        g_3d = transforms.unproject_points(point, camera_params)
 
         # find intersection of 3D gaze with plane
-        pos_cam = self.vector_intersect(g3D)  # default vec origin (0,0,0) because we use g3D from camera's view point
+        pos_cam = self.vector_intersect(
+            g_3d
+        )  # default vec origin (0,0,0) because we use g_3d from camera's view point
 
         # above intersection is in camera space, turn into world space to get position on plane
-        (x, y, z) = self.cam_frame_to_world(pos_cam)  # z should be very close to zero
+        (x, y, _z) = self.cam_frame_to_world(pos_cam)  # _z should be very close to zero
         return np.asarray([x, y]), pos_cam
 
     def plane_to_cam_homography(self, point: np.ndarray, camera_params: ocv.CameraParams) -> np.ndarray:
-        # from location on plane (2D) to location on camera image (2D)
+        """Project a 2D point on the plane to a 2D camera image location using homography."""
         if self.homography_mat is None:
             return np.full((2,), np.nan)
 
@@ -139,7 +160,7 @@ class Pose:
         return out
 
     def cam_to_plane_homography(self, point_cam: np.ndarray, camera_params: ocv.CameraParams) -> np.ndarray:
-        # from location on camera image (2D) to location on plane (2D)
+        """Project a 2D camera image point onto the plane using homography."""
         if self.homography_mat is None:
             return np.full((2,), np.nan)
 
@@ -148,9 +169,11 @@ class Pose:
         return transforms.apply_homography(point_cam, self.homography_mat).flatten()
 
     def get_origin_on_image(self, camera_params: ocv.CameraParams) -> np.ndarray:
+        """Return the plane origin projected onto the camera image."""
         return self.get_plane_point_on_image(np.zeros((1, 2)), camera_params)
 
     def get_plane_point_on_image(self, point: np.ndarray, camera_params: ocv.CameraParams) -> np.ndarray:
+        """Return a plane point projected onto the camera image, using pose or homography."""
         if self.pose_successful() and camera_params.has_intrinsics():
             a = self.plane_to_cam_pose(np.append(np.array(point), 0.0), camera_params)
         elif self.homography_successful():
@@ -159,7 +182,10 @@ class Pose:
             a = np.full((2,), np.nan)
         return a
 
-    def vector_intersect(self, vector: np.ndarray, origin=np.array([0.0, 0.0, 0.0])):
+    def vector_intersect(self, vector: np.ndarray, origin: np.ndarray | None = None) -> np.ndarray:
+        """Find the intersection of a ray with the plane in camera space."""
+        if origin is None:
+            origin = np.array([0.0, 0.0, 0.0])
         if (self.pose_R_vec is None) or (self.pose_T_vec is None) or np.any(np.isnan(vector)):
             return np.full((3,), np.nan)
 
@@ -183,15 +209,19 @@ class Pose:
         )
 
 
-def read_dict_from_file(fileName: str | pathlib.Path, episodes: list[list[int]] | None = None) -> dict[int, Pose]:
-    return data_files.read_file(fileName, Pose, True, True, False, False, episodes=episodes)[0]
+def read_dict_from_file(file_name: str | pathlib.Path, episodes: list[list[int]] | None = None) -> dict[int, Pose]:
+    """Read pose data from a TSV file into a dict keyed by frame index."""
+    return data_files.read_file(file_name, Pose, True, True, False, False, episodes=episodes)[0]
 
 
-def write_list_to_file(poses: list[Pose], fileName: str | pathlib.Path, skip_failed=False):
-    data_files.write_array_to_file(poses, fileName, Pose._columns_compressed, skip_all_nan=skip_failed)
+def write_list_to_file(poses: list[Pose], file_name: str | pathlib.Path, skip_failed: bool = False) -> None:
+    """Write a list of Pose objects to a TSV file."""
+    data_files.write_array_to_file(poses, file_name, Pose._columns_compressed, skip_all_nan=skip_failed)
 
 
 class Status(enum.Enum):
+    """Processing status for a single video frame."""
+
     Ok = enum.auto()
     Skip = enum.auto()
     Finished = enum.auto()
@@ -201,12 +231,15 @@ _T = typing.TypeVar("_T")
 
 
 class Estimator:
+    """Video-based pose estimator that processes frames to detect planes and markers."""
+
     def __init__(
         self,
         video_file: str | pathlib.Path,
         frame_timestamp_file: str | pathlib.Path | timestamps.VideoTimestamps,
         camera_calibration_file: str | pathlib.Path | ocv.CameraParams,
-    ):
+    ) -> None:
+        """Initialize estimator with video, timestamps, and camera calibration."""
         self.video_ts = (
             frame_timestamp_file
             if isinstance(frame_timestamp_file, timestamps.VideoTimestamps)
@@ -240,16 +273,19 @@ class Estimator:
         self.extra_proc_parameters: dict[str, dict[str, typing.Any]] = {}
         self.extra_proc_visualizers: dict[str, typing.Callable[[str, np.ndarray, int, typing.Any], None] | None] = {}
 
-        self._cache: tuple[
-            Status,
-            dict[str, Pose],
-            dict[_T, marker.Pose],
-            dict[str, tuple[int, typing.Any]],
-            tuple[np.ndarray, int, float],
-        ] = None  # self._cache[4][1] is frame number
+        self._cache: (
+            tuple[
+                Status,
+                dict[str, Pose],
+                dict[_T, marker.Pose],
+                dict[str, tuple[int, typing.Any]],
+                tuple[np.ndarray, int, float],
+            ]
+            | None
+        ) = None  # self._cache[4][1] is frame number
 
         self.allow_early_exit = True
-        self.progress_updater: typing.Callable[[], None] = None
+        self.progress_updater: typing.Callable[[], None] | None = None
 
         self.do_visualize = False
         self.sub_pixel_fac = 8
@@ -265,9 +301,10 @@ class Estimator:
         plane_function: typing.Callable[
             [str, int, np.ndarray, ocv.CameraParams], tuple[np.ndarray, np.ndarray] | None
         ],
-        processing_intervals: tuple[annotation.EventType, list[int] | list[list[int]]] = None,
-        plane_visualizer: typing.Callable[[str, int, np.ndarray, np.ndarray], None] = None,
-    ):
+        processing_intervals: tuple[annotation.EventType, list[int] | list[list[int]]] | None = None,
+        plane_visualizer: typing.Callable[[str, int, np.ndarray, np.ndarray], None] | None = None,
+    ) -> None:
+        """Register a plane detection function for video processing."""
         if not self._first_frame:
             raise RuntimeError("You cannot register planes once video processing has started")
         if plane in self.plane_functions:
@@ -282,9 +319,10 @@ class Estimator:
         individual_marker_function: typing.Callable[
             [_T, int, np.ndarray, ocv.CameraParams], tuple[np.ndarray, np.ndarray | None]
         ],
-        processing_intervals: tuple[annotation.EventType, list[int] | list[list[int]]] = None,
-        individual_marker_visualizer: typing.Callable[[str, int, np.ndarray, np.ndarray], None] = None,
-    ):
+        processing_intervals: tuple[annotation.EventType, list[int] | list[list[int]]] | None = None,
+        individual_marker_visualizer: typing.Callable[[str, int, np.ndarray, np.ndarray], None] | None = None,
+    ) -> None:
+        """Register an individual marker detection function for video processing."""
         if not self._first_frame:
             raise RuntimeError("You cannot register individual markers once video processing has started")
         if key in self.individual_marker_functions:
@@ -300,7 +338,8 @@ class Estimator:
         func: typing.Callable[[str, int, np.ndarray, ocv.CameraParams, typing.Any], tuple],
         func_parameters: dict[str, typing.Any],
         visualizer: typing.Callable[[str, np.ndarray, int, typing.Any], None],
-    ):
+    ) -> None:
+        """Register an extra processing function for video processing."""
         if not self._first_frame:
             raise RuntimeError("You cannot register extra processing functions once video processing has started")
         if name in self.extra_proc_functions:
@@ -310,17 +349,20 @@ class Estimator:
         self.extra_proc_parameters[name] = func_parameters
         self.extra_proc_visualizers[name] = visualizer
 
-    def set_allow_early_exit(self, allow_early_exit: bool):
-        # if False, processing will not stop because last frame with a defined plane or extra processing is reached
+    def set_allow_early_exit(self, allow_early_exit: bool) -> None:
+        """Set whether processing stops after the last defined interval."""
         self.allow_early_exit = allow_early_exit
 
-    def set_progress_updater(self, progress_updater: typing.Callable[[], None]):
+    def set_progress_updater(self, progress_updater: typing.Callable[[], None]) -> None:
+        """Set the callback invoked after each frame is processed."""
         self.progress_updater = progress_updater
 
-    def set_visualize_on_frame(self, do_visualize: bool):
+    def set_visualize_on_frame(self, do_visualize: bool) -> None:
+        """Enable or disable drawing detections on frames during processing."""
         self.do_visualize = do_visualize
 
     def get_video_info(self) -> tuple[int, int, float]:
+        """Return video width, height, and FPS."""
         return (
             int(self.video.get_prop(cv2.CAP_PROP_FRAME_WIDTH)),
             int(self.video.get_prop(cv2.CAP_PROP_FRAME_HEIGHT)),
@@ -328,17 +370,17 @@ class Estimator:
         )
 
     def estimate_pose(
-        self, object_points: np.ndarray, img_points: np.ndarray, flags=cv2.SOLVEPNP_ITERATIVE
+        self, object_points: np.ndarray, img_points: np.ndarray, flags: int = cv2.SOLVEPNP_ITERATIVE
     ) -> tuple[int, np.ndarray, np.ndarray, float]:
+        """Estimate camera pose from object-image point correspondences."""
         return estimate_pose(object_points, img_points, self.cam_params, flags)
 
     def estimate_homography(self, object_points: np.ndarray, img_points: np.ndarray) -> tuple[int, np.ndarray]:
+        """Estimate homography from object-image point correspondences."""
         return estimate_homography(object_points, img_points, self.cam_params)
 
-    # higher level functions for detecting + pose estimation
-    def estimate_pose_and_homography(
-        self, frame_idx: int, object_points: np.ndarray, img_points: np.ndarray
-    ) -> tuple[Pose, dict[str]]:
+    def estimate_pose_and_homography(self, frame_idx: int, object_points: np.ndarray, img_points: np.ndarray) -> Pose:
+        """Estimate both camera pose and homography for a single frame."""
         pose = Pose(frame_idx)
         if (
             object_points is not None and img_points is not None and img_points.shape[0] >= 4
@@ -353,7 +395,7 @@ class Estimator:
         return pose
 
     def process_one_frame(
-        self, wanted_frame_idx: int = None
+        self, wanted_frame_idx: int | None = None
     ) -> tuple[
         Status,
         dict[str, Pose],
@@ -361,6 +403,7 @@ class Estimator:
         dict[str, tuple[int, typing.Any]],
         tuple[np.ndarray, int, float],
     ]:
+        """Process a single video frame, returning status, poses, markers, extras, and frame data."""
         if wanted_frame_idx is not None and self._cache is not None and self._cache[4][1] == wanted_frame_idx:
             return self._cache
 
@@ -423,8 +466,8 @@ class Estimator:
                 if det_output[0] is not None:
                     plane_points[p] = det_output
             # determine pose
-            for p in plane_points:
-                pose_out[p] = self.estimate_pose_and_homography(frame_idx, *plane_points[p])
+            for p, points in plane_points.items():
+                pose_out[p] = self.estimate_pose_and_homography(frame_idx, *points)
 
         if indiv_markers_for_this_frame:
             # detect fiducials
@@ -436,14 +479,12 @@ class Estimator:
                 ):  # object points may not be available (e.g. when marker size is not set), so check for image points
                     indiv_marker_points[i] = det_output
             # determine pose, if wanted
-            for i in indiv_marker_points:
+            for i, i_points in indiv_marker_points.items():
                 mpose = marker.Pose(frame_idx)
                 if (
-                    indiv_marker_points[i][0] is not None
+                    i_points[0] is not None
                 ):  # object points may not be available (e.g. when marker size is not set). If so, skip pose estimation
-                    _, mpose.R_vec, mpose.T_vec, _ = self.estimate_pose(
-                        *indiv_marker_points[i], flags=cv2.SOLVEPNP_IPPE_SQUARE
-                    )
+                    _, mpose.R_vec, mpose.T_vec, _ = self.estimate_pose(*i_points, flags=cv2.SOLVEPNP_IPPE_SQUARE)
                 individual_marker_out[i] = mpose
 
         for e in extra_processing_for_this_frame:
@@ -455,30 +496,30 @@ class Estimator:
         if self.do_visualize:
             # first draw all detection output
             if planes_for_this_frame:
-                for p in plane_points:
+                for p, p_pts in plane_points.items():
                     if self.plane_visualizers[p] is None:
                         continue
-                    self.plane_visualizers[p](p, frame_idx, frame, plane_points[p][0])
+                    self.plane_visualizers[p](p, frame_idx, frame, p_pts[0])
             if indiv_markers_for_this_frame:
-                for i in indiv_marker_points:
+                for i, i_pts in indiv_marker_points.items():
                     if self.individual_marker_visualizers[i] is None:
                         continue
-                    self.individual_marker_visualizers[i](i, frame_idx, frame, indiv_marker_points[i][0])
+                    self.individual_marker_visualizers[i](i, frame_idx, frame, i_pts[0])
             for e in extra_processing_for_this_frame:
                 if self.show_extra_processing_output and self.extra_proc_visualizers[e] and e in extra_processing_out:
                     self.extra_proc_visualizers[e](e, frame, *extra_processing_out[e])
 
             # now also draw pose, if wanted
             if self.plane_axis_arm_length:
-                for p in pose_out:
-                    if pose_out[p].pose_successful():
-                        pose_out[p].draw_frame_axis(
+                for p_pose in pose_out.values():
+                    if p_pose.pose_successful():
+                        p_pose.draw_frame_axis(
                             frame, self.cam_params, self.plane_axis_arm_length, 3, sub_pixel_fac=self.sub_pixel_fac
                         )
             if self.individual_marker_axis_arm_length:
-                for i in individual_marker_out:
-                    if individual_marker_out[i].pose_successful():
-                        individual_marker_out[i].draw_frame_axis(
+                for i_mpose in individual_marker_out.values():
+                    if i_mpose.pose_successful():
+                        i_mpose.draw_frame_axis(
                             frame, self.cam_params, self.individual_marker_axis_arm_length, self.sub_pixel_fac
                         )
 
@@ -488,6 +529,7 @@ class Estimator:
     def process_video(
         self,
     ) -> tuple[dict[str, list[Pose]], dict[_T, list[marker.Pose]], dict[str, list[tuple[int, typing.Any]]]]:
+        """Process the entire video, returning accumulated poses, markers, and extra outputs."""
         poses_out: dict[str, list[Pose]] = {p: [] for p in self.plane_functions}
         individual_markers_out: dict[_T, list[marker.Pose]] = {i: [] for i in self.individual_marker_functions}
         extra_processing_out: dict[str, list[tuple[int, typing.Any]]] = {e: [] for e in self.extra_proc_functions}
@@ -509,17 +551,20 @@ class Estimator:
 
 
 def estimate_pose(
-    object_points: np.ndarray, img_points: np.ndarray, cam_params: ocv.CameraParams, flags=cv2.SOLVEPNP_ITERATIVE
+    object_points: np.ndarray,
+    img_points: np.ndarray,
+    cam_params: ocv.CameraParams,
+    flags: int = cv2.SOLVEPNP_ITERATIVE,
 ) -> tuple[int, np.ndarray, np.ndarray, float]:
-    # NB: N_markers also flags success of the pose estimation: it will also be 0 if not successful or not possible (e.g., missing intrinsics)
-    N_points, R_vec, T_vec, reprojection_error = 0, None, None, -1.0
+    """Estimate camera pose via PnP, returning point count, rotation, translation, and reprojection error."""
+    n_points, r_vec, t_vec, reprojection_error = 0, None, None, -1.0
     if (
         object_points is None or not cam_params.has_intrinsics() or object_points.shape[0] < 4
     ):  # minimum 4 points needed
-        return N_points, R_vec, T_vec, reprojection_error
+        return n_points, r_vec, t_vec, reprojection_error
 
     if cam_params.has_opencv_camera():
-        N_solutions, R_vec, T_vec, reprojection_error = cv2.solvePnPGeneric(
+        n_solutions, r_vec, t_vec, reprojection_error = cv2.solvePnPGeneric(
             object_points,
             img_points,
             cam_params.camera_mtx,
@@ -528,7 +573,7 @@ def estimate_pose(
             np.empty(1),
             flags=flags,
         )
-        N_points = object_points.shape[0] if N_solutions else 0
+        n_points = object_points.shape[0] if n_solutions else 0
         reprojection_error = reprojection_error[0][0]
     else:
         # we have a camera not supported by OpenCV
@@ -537,7 +582,7 @@ def estimate_pose(
         points_cam = transforms.project_points(
             points_w, ocv.CameraParams(cam_params.resolution, np.identity(3), np.zeros((5, 1)))
         )
-        N_points, R_vec, T_vec, _ = cv2.solvePnPGeneric(
+        n_points, r_vec, t_vec, _ = cv2.solvePnPGeneric(
             object_points,
             points_cam.reshape((-1, 1, 2)),
             np.identity(3),
@@ -547,29 +592,29 @@ def estimate_pose(
             flags=flags,
         )
         # need to compute reprojection error ourselves, output of solvePnPGeneric is meaningless due to arbitrary camera point units
-        if N_points:
-            proj_points = transforms.project_points(object_points, cam_params, rot_vec=R_vec[0], trans_vec=T_vec[0])
+        if n_points:
+            proj_points = transforms.project_points(object_points, cam_params, rot_vec=r_vec[0], trans_vec=t_vec[0])
             reprojection_error = cv2.norm(
                 proj_points.astype("float32").reshape((-1, 1, 2)), img_points, cv2.NORM_L2
             ) / np.sqrt(2 * proj_points.shape[0])
         else:
             reprojection_error = np.nan
-    return N_points, R_vec[0], T_vec[0], reprojection_error
+    return n_points, r_vec[0], t_vec[0], reprojection_error
 
 
 def estimate_homography(
     object_points: np.ndarray, img_points: np.ndarray, cam_params: ocv.CameraParams
 ) -> tuple[int, np.ndarray]:
-    # NB: N_points also flags success of the pose estimation: it is 0 if not successful
-    N_points, H = 0, None
+    """Estimate homography from object-image correspondences, returning point count and matrix."""
+    n_points, h = 0, None
     if object_points is None or object_points.shape[0] < 4:  # minimum 4 points needed
-        return N_points, H
+        return n_points, h
 
     # use undistorted marker corners if possible
     if cam_params is not None and cam_params.has_intrinsics():
         img_points = transforms.undistort_points(img_points.reshape((-1, 2)), cam_params).reshape((-1, 1, 2))
 
-    H = transforms.estimate_homography(object_points, img_points)
-    if H is not None:
-        N_points = object_points.shape[0]
-    return N_points, H
+    h = transforms.estimate_homography(object_points, img_points)
+    if h is not None:
+        n_points = object_points.shape[0]
+    return n_points, h

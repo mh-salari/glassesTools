@@ -48,7 +48,7 @@ class Plane(_plane.TargetPlane):
             int, tuple[int, int]
         ] = {}  # {marker ID: (target ID, marker_N column in target file)} (keep latter around for good error reporting)
         self._dynamic_markers_cache: dict[int, _marker.MarkerID] = (
-            None  # different format, for efficient return from get_marker_IDs()
+            None  # different format, for efficient return from get_marker_ids()
         )
         targets, origin = self._get_targets(config_dir, self.config, is_dynamic)
 
@@ -100,13 +100,13 @@ class Plane(_plane.TargetPlane):
         self._dynamic_markers_cache = None
         return targets, origin
 
-    def get_marker_IDs(self) -> dict[str | int, list[_marker.MarkerID]]:
+    def get_marker_ids(self) -> dict[str | int, list[_marker.MarkerID]]:
         if self._dynamic_markers_cache is None:
             self._dynamic_markers_cache = defaultdict(list)
             # {marker ID: (target ID, marker_N column in target file)} -> {marker_N column in target file: [(marker_id, aruco_dict)]}
             for m in self.dynamic_markers:
                 self._dynamic_markers_cache[self.dynamic_markers[m][1]].append(_marker.MarkerID(m, self.aruco_dict_id))
-        return super().get_marker_IDs() | self._dynamic_markers_cache
+        return super().get_marker_ids() | self._dynamic_markers_cache
 
     def is_dynamic(self):
         return bool(self.dynamic_markers)

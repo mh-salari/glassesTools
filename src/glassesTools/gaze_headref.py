@@ -81,7 +81,7 @@ class Gaze:
         world_thickness: int = -1,
     ) -> None:
         """Draw the gaze point on an image, optionally including the 3-D projection."""
-        drawing.openCVCircle(img, self.gaze_pos_vid, radius, clr, thickness, sub_pixel_fac)
+        drawing.opencv_circle(img, self.gaze_pos_vid, radius, clr, thickness, sub_pixel_fac)
         # draw 3D gaze point as well, usually coincides with 2D gaze point, but not always. E.g. the Adhawk MindLink may
         # apply a correction for parallax error to the projected gaze point using the vergence signal.
         if (
@@ -96,7 +96,7 @@ class Gaze:
                 rot_vec=camera_params.rotation_vec,
                 trans_vec=camera_params.position,
             ).flatten()
-            drawing.openCVCircle(img, a, world_radius, world_clr, world_thickness, sub_pixel_fac)
+            drawing.opencv_circle(img, a, world_radius, world_clr, world_thickness, sub_pixel_fac)
 
 
 def read_dict_from_file(

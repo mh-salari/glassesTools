@@ -1,3 +1,5 @@
+"""OpenCV camera parameter handling and video reading utilities."""
+
 import bisect
 import copy
 import pathlib
@@ -11,32 +13,34 @@ import pycolmap
 
 
 class CameraParams:
+    """Camera intrinsic and extrinsic parameters with optional COLMAP camera model."""
+
     def __init__(
         self,
         # camera info
-        resolution: np.ndarray,
+        resolution: np.ndarray | None,
         # intrinsics
-        camera_mtx: np.ndarray,
-        distort_coeffs: np.ndarray = None,
+        camera_mtx: np.ndarray | None,
+        distort_coeffs: np.ndarray | None = None,
         # extrinsics
-        rotation_vec: np.ndarray = None,
-        position: np.ndarray = None,
+        rotation_vec: np.ndarray | None = None,
+        position: np.ndarray | None = None,
         # colmap camera dict
-        colmap_camera_dict: dict[str, Any] = None,
-    ):
-
+        colmap_camera_dict: dict[str, Any] | None = None,
+    ) -> None:
+        """Initialize camera parameters from arrays and/or a COLMAP camera dict."""
         # info about camera
-        self.resolution: np.ndarray = resolution.flatten() if resolution is not None else None
+        self.resolution: np.ndarray | None = resolution.flatten() if resolution is not None else None
         # intrinsics
-        self.camera_mtx: np.ndarray = camera_mtx
-        self.distort_coeffs: np.ndarray = distort_coeffs.flatten() if distort_coeffs is not None else None
+        self.camera_mtx: np.ndarray | None = camera_mtx
+        self.distort_coeffs: np.ndarray | None = distort_coeffs.flatten() if distort_coeffs is not None else None
         # extrinsics
-        self.rotation_vec: np.ndarray = rotation_vec.flatten() if rotation_vec is not None else None
-        self.position: np.ndarray = position.flatten() if position is not None else None
+        self.rotation_vec: np.ndarray | None = rotation_vec.flatten() if rotation_vec is not None else None
+        self.position: np.ndarray | None = position.flatten() if position is not None else None
 
         # colmap, for more extensive camera models
-        self.colmap_camera: pycolmap.Camera = None
-        self.colmap_camera_no_distortion: pycolmap.Camera = None
+        self.colmap_camera: pycolmap.Camera | None = None
+        self.colmap_camera_no_distortion: pycolmap.Camera | None = None
 
         # initialize the colmap cameras
         if colmap_camera_dict:
@@ -67,21 +71,22 @@ class CameraParams:
             self.colmap_camera_no_distortion = pycolmap.Camera(cam_dict)
 
     @staticmethod
-    def read_from_file(fileName: str | pathlib.Path) -> "CameraParams":
-        fileName = pathlib.Path(fileName)
-        if not fileName.is_file():
+    def read_from_file(file_name: str | pathlib.Path) -> "CameraParams":
+        """Read camera parameters from an OpenCV FileStorage XML/YAML file."""
+        file_name = pathlib.Path(file_name)
+        if not file_name.is_file():
             return CameraParams(None, None)
 
-        fs = cv2.FileStorage(fileName, cv2.FILE_STORAGE_READ)
+        fs = cv2.FileStorage(file_name, cv2.FILE_STORAGE_READ)
         resolution = fs.getNode("resolution").mat()
         # intrinsics
-        cameraMatrix = fs.getNode("cameraMatrix").mat()
-        distCoeff = fs.getNode("distCoeff").mat()
+        camera_matrix = fs.getNode("cameraMatrix").mat()
+        dist_coeff = fs.getNode("distCoeff").mat()
         # extrinsics
-        cameraRotation = fs.getNode("rotation").mat()
-        if cameraRotation is not None:
-            cameraRotation = cv2.Rodrigues(cameraRotation)[0]  # need rotation vector, not rotation matrix
-        cameraPosition = fs.getNode("position").mat()
+        camera_rotation = fs.getNode("rotation").mat()
+        if camera_rotation is not None:
+            camera_rotation = cv2.Rodrigues(camera_rotation)[0]  # need rotation vector, not rotation matrix
+        camera_position = fs.getNode("position").mat()
         # colmap camera dict, if available
         colmap_camera = {}
         colmap_camera_n = fs.getNode("colmap_camera")
@@ -94,23 +99,30 @@ class CameraParams:
             colmap_camera["has_prior_focal_length"] = bool(colmap_camera_n.getNode("width").real())
         fs.release()
 
-        return CameraParams(resolution, cameraMatrix, distCoeff, cameraRotation, cameraPosition, colmap_camera)
+        return CameraParams(resolution, camera_matrix, dist_coeff, camera_rotation, camera_position, colmap_camera)
 
-    def has_opencv_camera(self):
+    def has_opencv_camera(self) -> bool:
+        """Return True if OpenCV camera matrix and distortion coefficients are available."""
         return (self.camera_mtx is not None) and (self.distort_coeffs is not None)
 
-    def has_colmap_camera(self):
+    def has_colmap_camera(self) -> bool:
+        """Return True if a COLMAP camera model is available."""
         return self.colmap_camera is not None
 
-    def has_intrinsics(self):
+    def has_intrinsics(self) -> bool:
+        """Return True if any intrinsic camera model (OpenCV or COLMAP) is available."""
         return self.has_opencv_camera() or self.has_colmap_camera()
 
-    def has_extrinsics(self):
+    def has_extrinsics(self) -> bool:
+        """Return True if rotation vector and position are available."""
         return (self.rotation_vec is not None) and (self.position is not None)
 
 
 class CV2VideoReader:
-    def __init__(self, file: str | pathlib.Path, timestamps: list | np.ndarray | pd.DataFrame):
+    """Sequential video reader using OpenCV with timestamp-based frame tracking."""
+
+    def __init__(self, file: str | pathlib.Path, timestamps: list[float] | np.ndarray | pd.DataFrame) -> None:
+        """Initialize video reader with a file path and frame timestamps."""
         self.file = pathlib.Path(file)
         if isinstance(timestamps, list):
             self._ts = np.array(timestamps)
@@ -125,20 +137,26 @@ class CV2VideoReader:
         self.nframes = len(self._ts)
         self.frame_idx = -1
         self._last_good_ts = (-1, -1.0, -1.0)  # frame_idx, ts from opencv, ts from file
-        self._cache: tuple[bool, np.ndarray, int, float] = None  # self._cache[2] is frame index
+        self._cache: tuple[bool, np.ndarray, int, float] | None = None  # self._cache[2] is frame index
 
-    def __del__(self):
+    def __del__(self) -> None:
+        """Release the underlying OpenCV video capture."""
         self._cap.release()
 
-    def get_prop(self, cv2_prop):
+    def get_prop(self, cv2_prop: int) -> float:
+        """Get a property value from the underlying OpenCV VideoCapture."""
         return self._cap.get(cv2_prop)
 
-    def set_prop(self, cv2_prop, val):
+    def set_prop(self, cv2_prop: int, val: float) -> bool:
+        """Set a property value on the underlying OpenCV VideoCapture."""
         return self._cap.set(cv2_prop, val)
 
     # NB: we seek by spooling, because I found seeking through setting cv2.CAP_PROP_POS_MSEC unreliable
-    def read_frame(self, report_gap=False, wanted_frame_idx: int = None) -> tuple[bool, np.ndarray, int, float]:
-        if wanted_frame_idx != None:
+    def read_frame(
+        self, report_gap: bool = False, wanted_frame_idx: int | None = None
+    ) -> tuple[bool, np.ndarray | None, int | None, float | None]:
+        """Read the next frame or a specific frame by index, spooling forward as needed."""
+        if wanted_frame_idx is not None:
             if wanted_frame_idx < 0 or wanted_frame_idx >= self.nframes:
                 raise ValueError(f"wanted_frame_idx ({wanted_frame_idx}) out of bounds ([0-{self.nframes - 1}])")
         else:
@@ -148,6 +166,7 @@ class CV2VideoReader:
             warnings.warn(
                 f"Requested frame ({wanted_frame_idx}) was earlier than current position of reader (frame {self.frame_idx}). Impossible to deliver because this video reader strictly advances forward. Returning last read frame",
                 RuntimeWarning,
+                stacklevel=2,
             )
             # this condition can only occur if we've already read something and thus have a cache, so this check should never trigger
             if self._cache is None:
@@ -202,12 +221,15 @@ class CV2VideoReader:
                     self._cache = False, frame, self.frame_idx, ts_from_list
                 return self._cache
 
-    def _find_closest_idx(self, time: float, times: np.ndarray) -> int:
+    @staticmethod
+    def _find_closest_idx(time: float, times: np.ndarray) -> int:
+        """Find the index of the closest timestamp in ``times`` to ``time``."""
         idx = bisect.bisect(times, time)
         if abs(times[idx - 1] - time) < abs(times[idx] - time):
             idx -= 1
         return idx
 
-    def report_frame(self, interval=100):
+    def report_frame(self, interval: int = 100) -> None:
+        """Print the current frame index at regular intervals."""
         if self.frame_idx % interval == 0:
             print(f"  frame {self.frame_idx}")

@@ -160,7 +160,7 @@ class Gaze:
 
         def _draw(img: np.ndarray, cam_pos: np.ndarray, sz: int, clr: tuple[int, int, int]) -> None:
             if not math.isnan(cam_pos[0]):
-                drawing.openCVCircle(img, cam_pos, sz, clr, -1, sub_pixel_fac)
+                drawing.opencv_circle(img, cam_pos, sz, clr, -1, sub_pixel_fac)
 
         def project_and_draw(img: np.ndarray, pos: np.ndarray, sz: int, clr: tuple[int, int, int]) -> None:
             _draw(img, _project(pos), sz, clr)

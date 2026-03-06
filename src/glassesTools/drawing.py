@@ -1,3 +1,5 @@
+"""OpenCV drawing primitives with sub-pixel anti-aliasing and marker visualization."""
+
 import math
 
 import cv2
@@ -6,10 +8,13 @@ import numpy as np
 from . import marker, ocv, transforms
 
 
-def openCVCircle(img, center_coordinates, radius, color, thickness, sub_pixel_fac):
+def opencv_circle(
+    img: np.ndarray, center_coordinates: np.ndarray, radius: float, color: tuple, thickness: int, sub_pixel_fac: int
+) -> None:
+    """Draw an anti-aliased circle with sub-pixel precision."""
     p = [np.round(x * sub_pixel_fac) for x in center_coordinates]
     if np.all([not math.isnan(x) and abs(x) < np.iinfo(np.intc).max for x in p]):
-        p = tuple([int(x) for x in p])
+        p = tuple(int(x) for x in p)
         cv2.circle(
             img,
             p,
@@ -21,61 +26,72 @@ def openCVCircle(img, center_coordinates, radius, color, thickness, sub_pixel_fa
         )
 
 
-def openCVLine(img, start_point, end_point, color, thickness, sub_pixel_fac):
+def opencv_line(
+    img: np.ndarray, start_point: np.ndarray, end_point: np.ndarray, color: tuple, thickness: int, sub_pixel_fac: int
+) -> None:
+    """Draw an anti-aliased line with sub-pixel precision."""
     sp = [np.round(x * sub_pixel_fac) for x in start_point]
     ep = [np.round(x * sub_pixel_fac) for x in end_point]
     if np.all([not math.isnan(x) and abs(x) < np.iinfo(np.intc).max for x in sp]) and np.all([
         not math.isnan(x) and abs(x) < np.iinfo(np.intc).max for x in ep
     ]):
-        sp = tuple([int(x) for x in sp])
-        ep = tuple([int(x) for x in ep])
+        sp = tuple(int(x) for x in sp)
+        ep = tuple(int(x) for x in ep)
         cv2.line(img, sp, ep, color, thickness, lineType=cv2.LINE_AA, shift=int(math.log2(sub_pixel_fac)))
 
 
-def openCVRectangle(img, p1, p2, color, thickness, sub_pixel_fac):
+def opencv_rectangle(
+    img: np.ndarray, p1: np.ndarray, p2: np.ndarray, color: tuple, thickness: int, sub_pixel_fac: int
+) -> None:
+    """Draw an anti-aliased rectangle with sub-pixel precision."""
     p1 = [np.round(x * sub_pixel_fac) for x in p1]
     p2 = [np.round(x * sub_pixel_fac) for x in p2]
     if np.all([not math.isnan(x) and abs(x) < np.iinfo(np.intc).max for x in p1]) and np.all([
         not math.isnan(x) and abs(x) < np.iinfo(np.intc).max for x in p2
     ]):
-        p1 = tuple([int(x) for x in p1])
-        p2 = tuple([int(x) for x in p2])
+        p1 = tuple(int(x) for x in p1)
+        p2 = tuple(int(x) for x in p2)
         cv2.rectangle(img, p1, p2, color, thickness, lineType=cv2.LINE_AA, shift=int(math.log2(sub_pixel_fac)))
 
 
-def openCVPolylines(img, pts, isClosed, color, thickness, sub_pixel_fac):
+def opencv_polylines(
+    img: np.ndarray, pts: np.ndarray, is_closed: bool, color: tuple, thickness: int, sub_pixel_fac: int
+) -> None:
+    """Draw anti-aliased polylines with sub-pixel precision."""
     pts = np.round(pts * sub_pixel_fac).astype(np.int32)
     if np.all([not math.isnan(x) and abs(x) < np.iinfo(np.intc).max for x in pts.flatten()]):
         cv2.polylines(
-            img, [pts], isClosed, color, thickness, lineType=cv2.LINE_AA, shift=int(math.log2(sub_pixel_fac))
+            img, [pts], is_closed, color, thickness, lineType=cv2.LINE_AA, shift=int(math.log2(sub_pixel_fac))
         )
 
 
-def openCVFrameAxis(
-    img,
+def opencv_frame_axis(
+    img: np.ndarray,
     cam_params: ocv.CameraParams,
-    rvec,
-    tvec,
-    arm_length,
-    thickness,
-    sub_pixel_fac,
-    position=[0.0, 0.0, 0.0],
-    offsetX=0,
-    offsetY=0,
-):
-    # same as the openCV function, but with anti-aliasing for a nicer image if subPixelFac>1
+    rvec: np.ndarray,
+    tvec: np.ndarray,
+    arm_length: float,
+    thickness: int,
+    sub_pixel_fac: int,
+    position: list[float] | None = None,
+    offset_x: float = 0,
+    offset_y: float = 0,
+) -> None:
+    """Draw 3D coordinate axes on an image using camera pose, with anti-aliasing."""
+    if position is None:
+        position = [0.0, 0.0, 0.0]
     points = np.vstack((np.zeros((1, 3)), arm_length * np.eye(3))) + np.vstack(4 * [np.asarray(position)])
     cam_points = transforms.project_points(points, cam_params, rot_vec=rvec, trans_vec=tvec)
-    offset = np.array([offsetX, offsetY])
+    offset = np.array([offset_x, offset_y])
     # z-sort them
-    RMat = cv2.Rodrigues(rvec)[0]
-    RtMat = np.hstack((RMat, tvec.reshape(3, 1)))
-    world_points = np.matmul(RtMat, cv2.convertPointsToHomogeneous(points[1:, :]).reshape((-1, 4)).T)
+    r_mat = cv2.Rodrigues(rvec)[0]
+    rt_mat = np.hstack((r_mat, tvec.reshape(3, 1)))
+    world_points = np.matmul(rt_mat, cv2.convertPointsToHomogeneous(points[1:, :]).reshape((-1, 4)).T)
     order = np.argsort(world_points[-1, :])[::-1]
     # draw
     colors = ((0, 0, 255), (0, 255, 0), (255, 0, 0))
     for i in order:
-        openCVLine(
+        opencv_line(
             img,
             cam_points[0].flatten() - offset,
             cam_points[i + 1].flatten() - offset,
@@ -85,38 +101,43 @@ def openCVFrameAxis(
         )
 
 
-def arucoDetectedMarkers(
-    img, corners, ids, border_color=(0, 255, 0), draw_IDs=True, sub_pixel_fac=1, special_highlight=None
-):
+def aruco_detected_markers(
+    img: np.ndarray,
+    corners: list,
+    ids: np.ndarray | None,
+    border_color: tuple = (0, 255, 0),
+    draw_ids: bool = True,
+    sub_pixel_fac: int = 1,
+    special_highlight: list | None = None,
+) -> None:
+    """Draw detected ArUco markers with anti-aliased borders and optional ID labels."""
     if special_highlight is None:
         special_highlight = []
-    # same as the openCV function, but with anti-aliasing for a (much) nicer image if subPixelFac>1
-    # and ability to use a different color from some of the markers
-    textColor = [x for x in border_color]
-    cornerColor = [x for x in border_color]
-    textColor[0], textColor[1] = textColor[1], textColor[0]  # text color just swap B and R
-    cornerColor[1], cornerColor[2] = cornerColor[2], cornerColor[1]  # corner color just swap G and R
+    text_color = list(border_color)
+    corner_color = list(border_color)
+    text_color[0], text_color[1] = text_color[1], text_color[0]  # text color just swap B and R
+    corner_color[1], corner_color[2] = corner_color[2], corner_color[1]  # corner color just swap G and R
 
-    draw_IDs = draw_IDs and (ids is not None) and len(ids) > 0
+    draw_ids = draw_ids and (ids is not None) and len(ids) > 0
 
     for i in range(len(corners)):
         corner = corners[i][0]
         # draw marker sides
-        sideColor = border_color
-        for s, c in zip(special_highlight[::2], special_highlight[1::2]):
+        side_color = border_color
+        for s, c in zip(special_highlight[::2], special_highlight[1::2], strict=True):
             if s is not None and ids[i][0] in s:
-                sideColor = c
+                side_color = c
         for j in range(4):
             p0 = corner[j, :]
             p1 = corner[(j + 1) % 4, :]
-            openCVLine(img, p0, p1, sideColor, 1, sub_pixel_fac)
+            opencv_line(img, p0, p1, side_color, 1, sub_pixel_fac)
 
         # draw first corner mark
         p1 = corner[0]
-        openCVRectangle(img, corner[0] - 3, corner[0] + 3, cornerColor, 1, sub_pixel_fac)
+        opencv_rectangle(img, corner[0] - 3, corner[0] + 3, corner_color, 1, sub_pixel_fac)
 
         # draw IDs if wanted
-        if draw_IDs:
+        if draw_ids:
             c = marker.corners_intersection(corner)
             cv2.putText(
                 img,
@@ -124,7 +145,7 @@ def arucoDetectedMarkers(
                 tuple(c.astype(np.intc)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
-                textColor,
+                text_color,
                 2,
                 lineType=cv2.LINE_AA,
             )
