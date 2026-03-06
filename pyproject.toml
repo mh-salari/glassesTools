@@ -1,6 +1,6 @@
 [project]
 name = "glassesTools"
-version = "1.24.0"
+dynamic = ["version"]
 description = "Tools for processing wearable eye tracker recordings."
 readme = "README.md"
 license = "MIT"
@@ -40,8 +40,17 @@ Repository = "https://github.com/dcnieho/glassesTools"
 Issues = "https://github.com/dcnieho/glassesTools/issues"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+version_scheme = "no-guess-dev"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/glassesTools/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/glassesTools"]
@@ -140,4 +149,8 @@ lint.ignore = [
     "PLR0917", #Too many arguments
     "PLR0914", #Too many local variables
     "INP001", # Flake8-no-pep420 - Implicit namespace package (requires __init__.py)
+    "N999",  # PEP8 Naming - Invalid module name (package uses camelCase by design)
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"src/glassesTools/__init__.py" = ["RUF067"]  # ffmpeg path setup must run at import time

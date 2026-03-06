@@ -42,6 +42,9 @@ wheels/
 *.egg
 MANIFEST
 
+# auto-generated version file
+src/glassesTools/_version.py
+
 # uv
 uv.lock
 
