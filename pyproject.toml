@@ -167,4 +167,5 @@ lint.ignore = [
 "src/glassesTools/pose.py" = ["N803", "SLF001"]  # pose_R_vec/pose_T_vec/pose_N_points match TSV columns; accesses _columns_compressed
 "src/glassesTools/process_pool.py" = ["ANN401", "SLF001", "TD002", "TD003", "FIX002"]  # *args/**kwargs passthrough; JobScheduler accesses JobDescription private members by design; existing TODO
 "src/glassesTools/gaze_overlay_video.py" = ["S404", "S603", "S605"]  # legitimate ffprobe/ffmpeg subprocess calls
+"src/glassesTools/file_actions.py" = ["N801", "N806", "ARG001", "ANN401", "S110", "SIM105", "SIM108", "DTZ006"]  # Win32 API naming conventions (NETRESOURCE, hEnum etc.); ctypes errcheck callbacks have fixed signatures and use Any; try-except-pass for best-effort cleanup; ternary hurts readability here; local timestamps intentional
 "src/glassesTools/video_utils.py" = ["S404", "S603"]  # legitimate ffprobe subprocess calls

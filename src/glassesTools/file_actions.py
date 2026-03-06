@@ -1,9 +1,12 @@
+"""File system directory listing, drive enumeration, and network share utilities."""
+
 import asyncio
 import datetime
 import mimetypes
 import pathlib
 import string
 from dataclasses import dataclass, field
+from typing import Any
 
 import aiopath
 import pathvalidate
@@ -13,6 +16,8 @@ from . import platform
 
 @dataclass
 class DirEntry:
+    """Represents a directory entry with metadata like timestamps and MIME type."""
+
     name: str
     is_dir: bool
     full_path: pathlib.Path
@@ -22,7 +27,8 @@ class DirEntry:
     mime_type: str
     extra: dict = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """Convert numeric timestamps to datetime objects."""
         if self.ctime is not None and not isinstance(self.ctime, datetime.datetime):
             self.ctime = datetime.datetime.fromtimestamp(self.ctime)
         if self.mtime is not None and not isinstance(self.mtime, datetime.datetime):
@@ -41,7 +47,7 @@ if platform.os == platform.Os.Windows:
     ERROR_EXTENDED_ERROR = 1208
     ERROR_SESSION_CREDENTIAL_CONFLICT = 1219
 
-    def _error_check_non0_is_error_ex(allowed, result, func, args):
+    def _error_check_non0_is_error_ex(allowed: list[int], result: int, _func: Any, _args: Any) -> int:
         if not result or result in allowed:
             return result
         if result == ERROR_EXTENDED_ERROR:
@@ -56,10 +62,10 @@ if platform.os == platform.Os.Windows:
             result = err
         raise ctypes.WinError(result)
 
-    def _error_check_non0_is_error(result, func, args):
-        return _error_check_non0_is_error_ex([], result, func, args)
+    def _error_check_non0_is_error(result: int, _func: Any, _args: Any) -> int:
+        return _error_check_non0_is_error_ex([], result, _func, _args)
 
-    def _error_check_0_is_error(result, func, args):
+    def _error_check_0_is_error(result: int, _func: Any, _args: Any) -> int:
         if not result:
             raise ctypes.WinError(ctypes.get_last_error())
         return result
@@ -80,6 +86,8 @@ if platform.os == platform.Os.Windows:
     SHGetFolderPath.errcheck = _error_check_non0_is_error
 
     class NETRESOURCE(ctypes.Structure):
+        """Win32 NETRESOURCE structure for network resource enumeration."""
+
         _fields_ = [
             ("scope", ctypes.wintypes.DWORD),
             ("type", ctypes.wintypes.DWORD),
@@ -195,6 +203,8 @@ if platform.os == platform.Os.Windows:
     GlobalFree.errcheck = _error_check_non0_is_error
 
     class UNIVERSAL_NAME_INFO(ctypes.Structure):
+        """Win32 UNIVERSAL_NAME_INFO structure for UNC path resolution."""
+
         _fields_ = [
             ("universal_name", ctypes.wintypes.LPWSTR),
         ]
@@ -202,6 +212,8 @@ if platform.os == platform.Os.Windows:
     LPUNIVERSAL_NAME_INFO = ctypes.POINTER(UNIVERSAL_NAME_INFO)
 
     class REMOTE_NAME_INFO(ctypes.Structure):
+        """Win32 REMOTE_NAME_INFO structure for remote path components."""
+
         _fields_ = [
             ("universal_name", ctypes.wintypes.LPWSTR),
             ("connection_name", ctypes.wintypes.LPWSTR),
@@ -262,6 +274,8 @@ if platform.os == platform.Os.Windows:
     MAX_PREFERRED_LENGTH = ctypes.wintypes.DWORD(-1)
 
     class SHARE_INFO_0(ctypes.Structure):
+        """Win32 SHARE_INFO_0 structure with share name only."""
+
         _fields_ = [
             ("netname", LMSTR),
         ]
@@ -269,6 +283,8 @@ if platform.os == platform.Os.Windows:
     LPSHARE_INFO_0 = ctypes.POINTER(SHARE_INFO_0)
 
     class SHARE_INFO_1(ctypes.Structure):
+        """Win32 SHARE_INFO_1 structure with share name, type, and remark."""
+
         _fields_ = [
             ("netname", LMSTR),
             ("type", ctypes.wintypes.DWORD),
@@ -308,6 +324,7 @@ if platform.os == platform.Os.Windows:
     NetApiBufferFree.restype = NET_API_STATUS
 
     def get_thispc_listing() -> list[DirEntry]:
+        """Return directory entries for Desktop, My Documents, and Downloads."""
         items = []
         # NB: we also check for Downloads folder (doesn't have a CSIDL), add if found
         # expect it as a subfolder of user's profile folder
@@ -337,6 +354,7 @@ if platform.os == platform.Os.Windows:
         return items
 
     def get_drives() -> list[DirEntry]:
+        """Enumerate logical drives with type, label, and size information."""
         drives = []
         bitmask = GetLogicalDrives()
         for letter in string.ascii_uppercase:
@@ -388,7 +406,8 @@ if platform.os == platform.Os.Windows:
 
         return drives
 
-    def get_visible_shares(server: str, user: str = "", password: str = "", domain=""):
+    def get_visible_shares(server: str, user: str = "", password: str = "", domain: str = "") -> list[DirEntry]:
+        """List visible network shares on a server."""
         shares: list[DirEntry] = []
 
         # if no user provided, user should be able to connect from the Windows
@@ -435,8 +454,8 @@ if platform.os == platform.Os.Windows:
 
         return shares
 
-    def get_all_shares(server: str, user: str = "", password: str = "", domain=""):
-        # similar to get_visible_shares() but also lists hidden shares
+    def get_all_shares(server: str, user: str = "", password: str = "", domain: str = "") -> list[DirEntry]:
+        """List all network shares on a server, including hidden ones."""
         shares: list[DirEntry] = []
 
         # if no user provided, user should be able to connect from the Windows
@@ -475,7 +494,8 @@ if platform.os == platform.Os.Windows:
 
         return shares
 
-    def check_share(server: str, share: str, user: str = "", password: str = "", domain=""):
+    def check_share(server: str, share: str, user: str = "", password: str = "", domain: str = "") -> bool:
+        """Return True if the named share exists on the server."""
         # if no user provided, user should be able to connect from the Windows
         # explorer to this server (e.g. user should have provided credentials)
         # if you can open it in explorer, you can list it using this call)
@@ -497,7 +517,7 @@ if platform.os == platform.Os.Windows:
 
         return ret != NERR_NetNameNotFound
 
-    def _server_login(server: str, user: str, password: str, domain=""):
+    def _server_login(server: str, user: str, password: str, domain: str = "") -> bool:
         # check if we already have a connection with the server, and if so, if
         # it is the expected user
         user_name = ctypes.create_unicode_buffer(1024)
@@ -506,7 +526,7 @@ if platform.os == platform.Os.Windows:
         server = f"\\\\{server}"
         try:
             WNetGetUser(server, user_name, ctypes.byref(buf_size))
-        except:
+        except Exception:
             need_conn = True
         else:
             user_name = user_name.value
@@ -523,16 +543,17 @@ if platform.os == platform.Os.Windows:
                 _error_check_non0_is_error(res, None, None)
         return need_conn
 
-    def _server_logout(server: str):
+    def _server_logout(server: str) -> None:
         server = server.strip("\\/")
         server = f"\\\\{server}"
         try:
             WNetCancelConnection2(server, 0, True)
-        except:
+        except Exception:
             # ok if this fails, we did our best
             pass
 
     def split_network_path(path: str | pathlib.Path) -> list[str]:
+        """Split a UNC network path into its components."""
         path = str(path)
         if not path.startswith(("\\\\", "//")):
             return []
@@ -541,8 +562,8 @@ if platform.os == platform.Os.Windows:
         path = path.strip("\\/").replace("\\", "/")
         return [s for s in str(path).split("/") if s]
 
-    def get_net_computer(path: str | pathlib.Path):
-        # determine if it is a network computer (\\SERVER) and not a path including share (\\SERVER\share)
+    def get_net_computer(path: str | pathlib.Path) -> str | None:
+        """Return the server name if path is a bare network computer, else None."""
         net_comp = split_network_path(path)
         if len(net_comp) == 1:  # a single name entry, so thats just a computer
             return net_comp[0]
@@ -550,7 +571,7 @@ if platform.os == platform.Os.Windows:
 
 
 async def get_dir_list(path: pathlib.Path) -> list[DirEntry]:
-    # will throw when path doesn't exist or is not a directory
+    """Asynchronously list directory entries with metadata."""
     path = aiopath.AsyncPath(path)
     out = []
     async for e in path.iterdir():
@@ -559,7 +580,7 @@ async def get_dir_list(path: pathlib.Path) -> list[DirEntry]:
             item = DirEntry(
                 e.name, is_dir, pathlib.Path(e), stat.st_ctime, stat.st_mtime, stat.st_size, mimetypes.guess_type(e)[0]
             )
-        except:
+        except Exception:
             pass
         else:
             out.append(item)
@@ -568,7 +589,7 @@ async def get_dir_list(path: pathlib.Path) -> list[DirEntry]:
 
 
 def get_dir_list_sync(path: pathlib.Path) -> list[DirEntry]:
-    # will throw when path doesn't exist or is not a directory
+    """Synchronously list directory entries with metadata."""
     path = pathlib.Path(path)
     out = []
     for e in path.iterdir():
@@ -583,7 +604,7 @@ def get_dir_list_sync(path: pathlib.Path) -> list[DirEntry]:
                 stat.st_size,
                 mimetypes.guess_type(e)[0],
             )
-        except:
+        except Exception:
             pass
         else:
             out.append(item)
@@ -591,13 +612,15 @@ def get_dir_list_sync(path: pathlib.Path) -> list[DirEntry]:
     return out
 
 
-async def make_dir(path: str | pathlib.Path, exist_ok: bool = False):
+async def make_dir(path: str | pathlib.Path, exist_ok: bool = False) -> None:
+    """Create a directory asynchronously after validating the path."""
     pathvalidate.validate_filepath(path, "auto")
     path = aiopath.AsyncPath(path)
     await path.mkdir(exist_ok=exist_ok)
 
 
-async def rename_path(old_path: str | pathlib.Path, new_path: str | pathlib.Path):
+async def rename_path(old_path: str | pathlib.Path, new_path: str | pathlib.Path) -> pathlib.Path:
+    """Rename a path asynchronously after validating both paths."""
     pathvalidate.validate_filepath(old_path, "auto")
     pathvalidate.validate_filepath(new_path, "auto")
     return await aiopath.AsyncPath(old_path).rename(new_path)

@@ -1,3 +1,5 @@
+"""File system browsing provider with async callbacks for directory listings and actions."""
+
 import concurrent
 import pathlib
 from collections.abc import Callable
@@ -6,11 +8,15 @@ from . import async_thread, file_actions, platform
 
 
 class FileActionProvider:
+    """Provides directory listing, creation, and renaming with async callback support."""
+
     def __init__(
         self,
-        listing_callback: Callable[[str, str | pathlib.Path, list[file_actions.DirEntry] | Exception], None] = None,
-        action_callback: Callable[[str, pathlib.Path, str, pathlib.Path | Exception], None] = None,
-    ):
+        listing_callback: Callable[[str, str | pathlib.Path, list[file_actions.DirEntry] | Exception], None]
+        | None = None,
+        action_callback: Callable[[str, pathlib.Path, str, pathlib.Path | Exception], None] | None = None,
+    ) -> None:
+        """Initialize with optional listing and action callbacks."""
         self.waiters: set[concurrent.futures.Future] = set()
 
         self.listing_callbacks: list[Callable[[list[file_actions.DirEntry] | Exception, bool], None]] = []
@@ -20,14 +26,16 @@ class FileActionProvider:
         if action_callback:
             self.action_callbacks.append(action_callback)
 
-    def __del__(self):
+    def __del__(self) -> None:
+        """Cancel any pending futures."""
         for w in self.waiters:
             if not w.done():
                 w.cancel()
 
     local_name = "This PC" if platform.os == platform.Os.Windows else "Root"
 
-    def get_listing(self, path: str | pathlib.Path) -> list[file_actions.DirEntry] | concurrent.futures.Future:
+    def get_listing(self, path: str | pathlib.Path) -> list[file_actions.DirEntry] | concurrent.futures.Future | None:
+        """Retrieve a directory listing for the given path."""
         fut = None
         if platform.os == platform.Os.Windows:
             if path == "root":
@@ -63,7 +71,9 @@ class FileActionProvider:
             self.waiters.add(fut)
         return fut
 
-    def _listing_done(self, fut: concurrent.futures.Future | list[file_actions.DirEntry], path: str | pathlib.Path):
+    def _listing_done(
+        self, fut: concurrent.futures.Future | list[file_actions.DirEntry], path: str | pathlib.Path
+    ) -> None:
         result = self._get_result_from_future(fut)
         if result == "cancelled":
             return  # nothing more to do
@@ -77,13 +87,15 @@ class FileActionProvider:
         for c in self.listing_callbacks:
             c(path, result)
 
-    def make_dir(self, path: pathlib.Path):
+    def make_dir(self, path: pathlib.Path) -> concurrent.futures.Future:
+        """Create a directory asynchronously."""
         action = "make_dir"
         fut = async_thread.run(file_actions.make_dir(path), lambda f: self._action_done(f, path, action))
         self.waiters.add(fut)
         return fut
 
-    def rename_path(self, old_path: pathlib.Path, new_path: pathlib.Path):
+    def rename_path(self, old_path: pathlib.Path, new_path: pathlib.Path) -> concurrent.futures.Future:
+        """Rename a path asynchronously."""
         action = "rename_path"
         fut = async_thread.run(
             file_actions.rename_path(old_path, new_path), lambda f: self._action_done(f, old_path, action)
@@ -91,7 +103,7 @@ class FileActionProvider:
         self.waiters.add(fut)
         return fut
 
-    def _action_done(self, fut: concurrent.futures.Future, path: pathlib.Path, action: str):
+    def _action_done(self, fut: concurrent.futures.Future, path: pathlib.Path, action: str) -> None:
         result = self._get_result_from_future(fut)
         if result == "cancelled":
             return  # nothing more to do
