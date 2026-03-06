@@ -34,9 +34,6 @@ dependencies = [
     "av",
 ]
 
-[project.optional-dependencies]
-gui = ["imgui_bundle[opengl,glfw]==1.92.600"]
-
 [project.urls]
 Homepage = "https://github.com/dcnieho/glassesTools"
 Repository = "https://github.com/dcnieho/glassesTools"

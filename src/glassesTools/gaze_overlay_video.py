@@ -12,15 +12,7 @@ import numpy as np
 from ffpyplayer.pic import Image
 from ffpyplayer.writer import MediaWriter
 
-from . import _has_GUI, gaze_headref, naming, ocv, timestamps, video_utils
-
-if _has_GUI:
-    from .gui import video_player
-else:
-    # stub out video_player as a class so type annotations below do not fail
-    class video_player:
-        @property
-        def GUI(self) -> typing.Any: ...
+from . import gaze_headref, naming, ocv, timestamps, video_utils
 
 
 class Status(Enum):
@@ -59,11 +51,8 @@ class VideoMaker:
 
         self._cache: tuple[Status, tuple[np.ndarray, int, float]] = None  # self._cache[1][1] is frame number
 
-        self.gui: video_player.GUI = None
-        self.has_gui = False
         self.progress_updater: typing.Callable[[], None] = None
 
-        self.do_visualize = False
         self.sub_pixel_fac = 8
 
         self.vid_pos_color: tuple[int, int, int] = (0, 255, 0)
@@ -72,8 +61,6 @@ class VideoMaker:
         self.world_pos_color: tuple[int, int, int] = (255, 0, 255)
         self.world_pos_radius: int = 5
         self.world_pos_thickness: int = -1
-
-        self._first_frame = True
 
         # set up output video
         self._fps = 1000 / self.video_ts.get_IFI()
@@ -92,22 +79,6 @@ class VideoMaker:
             "frame_rate": fpsFrac,
         }
         self._vid_writer = MediaWriter(str(self.output_path), [out_opts], overwrite=True)
-
-    def __del__(self):
-        if self.has_gui:
-            self.gui.stop()
-
-    def attach_gui(self, gui: video_player.GUI | None, window_id: int = None):
-        self.gui = gui
-        self.has_gui = self.gui is not None
-        self.do_visualize = self.has_gui
-
-        if self.has_gui:
-            self.gui.set_show_timeline(True, self.video_ts, None, window_id)
-            self.gui.set_frame_size(self._res)
-
-    def set_visualize_on_frame(self, do_visualize: bool):
-        self.do_visualize = do_visualize
 
     def set_progress_updater(self, progress_updater: typing.Callable[[], None]):
         self.progress_updater = progress_updater
@@ -135,10 +106,6 @@ class VideoMaker:
             self.world_pos_thickness = thickness
 
     def _read_frame(self, wanted_frame_idx: int | None = None) -> tuple[Status, tuple[np.ndarray, int, float]]:
-        if self._first_frame and self.has_gui:
-            self.gui.set_playing(True)
-            self._first_frame = False
-
         if wanted_frame_idx is not None and self._cache is not None and self._cache[1][1] == wanted_frame_idx:
             return self._cache
 
@@ -149,16 +116,6 @@ class VideoMaker:
         if should_exit:
             self._cache = Status.Finished, (None, None, None)
             return self._cache
-
-        if self.has_gui:
-            requests = self.gui.get_requests()
-            for r, _ in requests:
-                if r == "exit":  # only requests we need to handle
-                    self._cache = Status.Finished, (None, None, None)
-                    return self._cache
-                if r == "close":
-                    self.has_gui = False
-                    self.gui.stop()
 
         # check we're in a current interval, else skip processing
         # NB: have to spool through like this, setting specific frame to read
@@ -196,10 +153,6 @@ class VideoMaker:
                     world_thickness=self.world_pos_thickness,
                 )
 
-        # now that all processing is done, handle gui
-        if self.has_gui:
-            self.gui.update_image(frame, frame_ts / 1000.0, frame_idx)
-
         # submit frame to be encoded
         img = Image(plane_buffers=[frame.flatten().tobytes()], pix_fmt="bgr24", size=(frame.shape[1], frame.shape[0]))
         self._vid_writer.write_frame(img=img, pts=frame_idx / self._fps)
@@ -208,9 +161,6 @@ class VideoMaker:
             self.progress_updater()
 
     def finish_video(self):
-        # nothing more to show, so clean up GUI if any
-        if self.has_gui:
-            self.gui.stop()
         self._vid_writer.close()
         # if ffmpeg is on path, add audio to scene video
         if (shutil.which("ffmpeg") is not None) and (shutil.which("ffprobe") is not None):

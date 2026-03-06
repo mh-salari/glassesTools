@@ -5,15 +5,7 @@ import typing
 import cv2
 import numpy as np
 
-from . import _has_GUI, annotation, data_files, drawing, intervals, marker, ocv, timestamps, transforms
-
-if _has_GUI:
-    from .gui import video_player
-else:
-    # stub out video_player as a class so type annotations below do not fail
-    class video_player:
-        @property
-        def GUI(self) -> typing.Any: ...
+from . import annotation, data_files, drawing, intervals, marker, ocv, timestamps, transforms
 
 
 class Pose:
@@ -256,8 +248,6 @@ class Estimator:
             tuple[np.ndarray, int, float],
         ] = None  # self._cache[4][1] is frame number
 
-        self.gui: video_player.GUI = None
-        self.has_gui = False
         self.allow_early_exit = True
         self.progress_updater: typing.Callable[[], None] = None
 
@@ -268,10 +258,6 @@ class Estimator:
         self.show_extra_processing_output = True
 
         self._first_frame = True
-
-    def __del__(self):
-        if self.has_gui:
-            self.gui.stop()
 
     def add_plane(
         self,
@@ -324,14 +310,6 @@ class Estimator:
         self.extra_proc_parameters[name] = func_parameters
         self.extra_proc_visualizers[name] = visualizer
 
-    def attach_gui(self, gui: video_player.GUI, episodes: dict[str, list[int]] = None, window_id: int = None):
-        self.gui = gui
-        self.has_gui = self.gui is not None
-        self.do_visualize = self.has_gui
-
-        if self.has_gui:
-            self.gui.set_show_timeline(True, self.video_ts, episodes, window_id)
-
     def set_allow_early_exit(self, allow_early_exit: bool):
         # if False, processing will not stop because last frame with a defined plane or extra processing is reached
         self.allow_early_exit = allow_early_exit
@@ -383,9 +361,6 @@ class Estimator:
         dict[str, tuple[int, typing.Any]],
         tuple[np.ndarray, int, float],
     ]:
-        if self._first_frame and self.has_gui:
-            self.gui.set_playing(True)
-
         if wanted_frame_idx is not None and self._cache is not None and self._cache[4][1] == wanted_frame_idx:
             return self._cache
 
@@ -412,19 +387,8 @@ class Estimator:
         if self.progress_updater:
             self.progress_updater()
 
-        if self.has_gui:
-            if self._first_frame and frame is not None:
-                self.gui.set_frame_size(frame.shape)
-                self._first_frame = False
-
-            requests = self.gui.get_requests()
-            for r, _ in requests:
-                if r == "exit":  # only requests we need to handle
-                    self._cache = Status.Finished, None, None, None, (None, None, None)
-                    return self._cache
-                if r == "close":
-                    self.has_gui = False
-                    self.gui.stop()
+        if self._first_frame:
+            self._first_frame = False
 
         # check we're in a current interval, else skip processing
         # NB: have to spool through like this, setting specific frame to read
@@ -445,9 +409,6 @@ class Estimator:
             not planes_for_this_frame and not indiv_markers_for_this_frame and not extra_processing_for_this_frame
         ):
             # we don't have a valid frame or nothing to do, continue to next
-            if self.has_gui:
-                # do update timeline of the viewers
-                self.gui.update_image(None, frame_ts / 1000.0, frame_idx)
             self._cache = Status.Skip, None, None, None, (frame, frame_idx, frame_ts)
             return self._cache
 
@@ -520,9 +481,6 @@ class Estimator:
                         individual_marker_out[i].draw_frame_axis(
                             frame, self.cam_params, self.individual_marker_axis_arm_length, self.sub_pixel_fac
                         )
-
-        if self.has_gui:
-            self.gui.update_image(frame, frame_ts / 1000.0, frame_idx)
 
         self._cache = Status.Ok, pose_out, individual_marker_out, extra_processing_out, (frame, frame_idx, frame_ts)
         return self._cache
