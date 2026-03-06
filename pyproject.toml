@@ -156,6 +156,8 @@ lint.ignore = [
 [tool.ruff.lint.per-file-ignores]
 "src/glassesTools/__init__.py" = ["RUF067"]  # ffmpeg path setup must run at import time
 "src/glassesTools/json.py" = ["ANN401"]  # JSON serialization legitimately uses typing.Any
+"src/glassesTools/async_thread.py" = ["ANN401"]  # wait() returns dynamically-typed coroutine result
+"src/glassesTools/propagating_thread.py" = ["ANN401"]  # *args/**kwargs passthrough and dynamic join() return
 "src/glassesTools/data_files.py" = ["ANN401", "SLF001"]  # record_class accepts any class; accesses internal _columns_compressed etc. by design
 "src/glassesTools/gaze_headref.py" = ["N803", "SLF001"]  # param names must match TSV column names (e.g. timestamp_VOR); accesses own class _columns_*
 "src/glassesTools/gaze_worldref.py" = ["N803", "SLF001"]  # param names must match TSV column names; accesses own class _columns_*
@@ -163,5 +165,6 @@ lint.ignore = [
 "src/glassesTools/fixation_classification.py" = ["N803"]  # I2MC_settings_override uses library name
 "src/glassesTools/marker.py" = ["N803", "SLF001"]  # R_vec/T_vec match TSV columns; accesses _columns_compressed/_non_float
 "src/glassesTools/pose.py" = ["N803", "SLF001"]  # pose_R_vec/pose_T_vec/pose_N_points match TSV columns; accesses _columns_compressed
+"src/glassesTools/process_pool.py" = ["ANN401", "SLF001", "TD002", "TD003", "FIX002"]  # *args/**kwargs passthrough; JobScheduler accesses JobDescription private members by design; existing TODO
 "src/glassesTools/gaze_overlay_video.py" = ["S404", "S603", "S605"]  # legitimate ffprobe/ffmpeg subprocess calls
 "src/glassesTools/video_utils.py" = ["S404", "S603"]  # legitimate ffprobe subprocess calls

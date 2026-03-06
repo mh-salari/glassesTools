@@ -1,3 +1,5 @@
+"""Async-to-thread bridge: run coroutines on a dedicated asyncio event loop."""
+
 import asyncio
 import concurrent
 import threading
@@ -9,8 +11,9 @@ thread: threading.Thread = None
 done_callback: typing.Callable = None
 
 
-def setup(enable_asyncio_debug=False):
-    global loop, thread
+def setup(enable_asyncio_debug: bool = False) -> None:
+    """Start a background event loop thread (idempotent)."""
+    global loop, thread  # noqa: PLW0603
     if loop and thread:
         # already set up, nothing to do
         return
@@ -18,7 +21,7 @@ def setup(enable_asyncio_debug=False):
     loop = asyncio.new_event_loop()
     loop.set_debug(enable_asyncio_debug)
 
-    def run_loop(loop: asyncio.AbstractEventLoop):
+    def _run_loop(loop: asyncio.AbstractEventLoop) -> None:
         asyncio.set_event_loop(loop)
         try:
             loop.run_forever()
@@ -26,12 +29,13 @@ def setup(enable_asyncio_debug=False):
             loop.run_until_complete(loop.shutdown_asyncgens())
             loop.close()
 
-    thread = threading.Thread(target=run_loop, args=(loop,), daemon=True)
+    thread = threading.Thread(target=_run_loop, args=(loop,), daemon=True)
     thread.start()
 
 
-def cleanup():
-    global loop, thread
+def cleanup() -> None:
+    """Stop the background event loop and join its thread."""
+    global loop, thread  # noqa: PLW0603
     if loop:
         loop.call_soon_threadsafe(loop.stop)
         loop = None
@@ -40,7 +44,10 @@ def cleanup():
         thread = None
 
 
-def run(coroutine: typing.Coroutine, override_done_callback: typing.Callable = None) -> concurrent.futures.Future:
+def run(
+    coroutine: typing.Coroutine, override_done_callback: typing.Callable | None = None
+) -> concurrent.futures.Future:
+    """Submit a coroutine to the background loop and return a Future."""
     future = asyncio.run_coroutine_threadsafe(coroutine, loop)
     if override_done_callback:
         future.add_done_callback(override_done_callback)
@@ -49,7 +56,8 @@ def run(coroutine: typing.Coroutine, override_done_callback: typing.Callable = N
     return future
 
 
-def wait(coroutine: typing.Coroutine):
+def wait(coroutine: typing.Coroutine) -> typing.Any:
+    """Submit a coroutine and block until it completes, returning its result."""
     future = run(coroutine)
     while future.running():
         time.sleep(0.1)
@@ -66,7 +74,8 @@ if __name__ == "__main__":
 
     import random
 
-    async def wait_and_say_hello(num):
+    async def wait_and_say_hello(num: int) -> None:
+        """Print a greeting after a random delay."""
         await asyncio.sleep(random.random())
         print(f"Hello {num}!")
 
