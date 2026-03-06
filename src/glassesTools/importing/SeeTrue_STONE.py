@@ -1,9 +1,9 @@
 """Cast raw SeeTrue data into common format.
 
 The output directory will contain:
-    - frameTimestamps.tsv: frame number and corresponding timestamps for each frame in video
+    - frame_timestamps.tsv: frame number and corresponding timestamps for each frame in video
     - worldCamera.mp4: the video from the point-of-view scene camera on the glasses
-    - gazeData.tsv: gaze data, where all 2D gaze coordinates are represented w/r/t the world camera
+    - gaze_data.tsv: gaze data, where all 2D gaze coordinates are represented w/r/t the world camera
 """
 
 import pathlib
@@ -20,38 +20,35 @@ from ..eyetracker import EyeTracker
 from ..recording import Recording
 
 
-def preprocessData(
+def preprocess_data(
     output_dir: str | pathlib.Path,
-    source_dir: str | pathlib.Path = None,
-    rec_info: Recording = None,
-    copy_scene_video=True,
-    source_dir_as_relative_path=False,
-    cam_cal_file: str | pathlib.Path = None,
+    source_dir: str | pathlib.Path | None = None,
+    rec_info: Recording | None = None,
+    _copy_scene_video: bool = True,
+    source_dir_as_relative_path: bool = False,
+    cam_cal_file: str | pathlib.Path | None = None,
 ) -> Recording:
+    """Run all preprocessing steps on SeeTrue STONE data and store in output_dir."""
     from . import _store_data, check_folders
-    # NB: copy_scene_video input argument is ignored, SeeTrue recordings must be transcoded with ffmpeg to be useful
+    # NB: _copy_scene_video input argument is ignored, SeeTrue recordings must be transcoded with ffmpeg to be useful
 
     if shutil.which("ffmpeg") is None:
         raise RuntimeError(
             "ffmpeg not found on path. ffmpeg is required for importing SeeTrue recordings. Cannot continue"
         )
-
-    """
-    Run all preprocessing steps on SeeTrue STONE data and store in output_dir
-    """
     output_dir, source_dir, rec_info, _ = check_folders(output_dir, source_dir, rec_info, EyeTracker.SeeTrue_STONE)
     print(f"processing: {source_dir.name} -> {output_dir}")
 
     # check and copy needed files to the output directory
     print("  Check and copy raw data...")
     if rec_info is not None:
-        if not checkRecording(source_dir, rec_info):
+        if not check_recording(source_dir, rec_info):
             raise ValueError(f'A recording with the name "{rec_info.name}" was not found in the folder {source_dir}.')
     else:
-        recInfos = getRecordingInfo(source_dir)
-        if recInfos is None:
+        rec_infos = get_recording_info(source_dir)
+        if rec_infos is None:
             raise RuntimeError(f"The folder {source_dir} does not contain SeeTrue STONE recordings.")
-        rec_info = recInfos[
+        rec_info = rec_infos[
             0
         ]  # take first, arbitrarily. If anything else wanted, user should call this function with a correct rec_info themselves
 
@@ -61,29 +58,31 @@ def preprocessData(
 
     # prep the data
     # NB: gaze data and scene video prep are intertwined, status messages are output inside this function
-    gazeDf, frameTimestamps = copySeeTrueRecording(source_dir, output_dir, rec_info)
+    gaze_df, frame_timestamps = copy_see_true_recording(source_dir, output_dir, rec_info)
 
     print("  Getting camera calibration...")
     if cam_cal_file is not None:
         shutil.copyfile(str(cam_cal_file), str(output_dir / naming.scene_camera_calibration_fname))
     else:
         print("    !! No camera calibration provided! Defaulting to hardcoded")
-        getCameraHardcoded(output_dir)
+        get_camera_hardcoded(output_dir)
 
-    _store_data(output_dir, gazeDf, frameTimestamps, rec_info, source_dir_as_relative_path=source_dir_as_relative_path)
+    _store_data(
+        output_dir, gaze_df, frame_timestamps, rec_info, source_dir_as_relative_path=source_dir_as_relative_path
+    )
 
     return rec_info
 
 
-def getRecordingInfo(inputDir: str | pathlib.Path) -> list[Recording]:
-    # returns None if not a recording directory
-    inputDir = pathlib.Path(inputDir)
-    recInfos = []
+def get_recording_info(input_dir: str | pathlib.Path) -> list[Recording] | None:
+    """Return recording info for the given directory, or None if not a valid recording."""
+    input_dir = pathlib.Path(input_dir)
+    rec_infos = []
 
     # NB: a SeeTrue directory may contain multiple recordings
 
     # get recordings. These are indicated by the sequence number in both EyeData.csv and ScenePics folder names
-    for r in inputDir.glob("*.csv"):
+    for r in input_dir.glob("*.csv"):
         if not str(r.name).startswith("EyeData"):
             # print(f"file {r.name} not recognized as a recording (wrong name, should start with 'EyeData'), skipping")
             continue
@@ -92,124 +91,121 @@ def getRecordingInfo(inputDir: str | pathlib.Path) -> list[Recording]:
         _, recording = r.stem.split("_")
 
         # check there is a matching scenevideo
-        sceneVidDir = r.parent / ("ScenePics_" + recording)
-        if not sceneVidDir.is_dir():
-            # print(f"folder {sceneVidDir} not found, meaning there is no scene video for this recording, skipping")
+        scene_vid_dir = r.parent / ("ScenePics_" + recording)
+        if not scene_vid_dir.is_dir():
+            # print(f"folder {scene_vid_dir} not found, meaning there is no scene video for this recording, skipping")
             continue
 
-        recInfos.append(Recording(source_directory=inputDir, eye_tracker=EyeTracker.SeeTrue_STONE))
-        recInfos[-1].participant = inputDir.name
-        recInfos[-1].name = recording
+        rec_infos.append(Recording(source_directory=input_dir, eye_tracker=EyeTracker.SeeTrue_STONE))
+        rec_infos[-1].participant = input_dir.name
+        rec_infos[-1].name = recording
 
     # should return None if no valid recordings found
-    return recInfos or None
+    return rec_infos or None
 
 
-def checkRecording(inputDir: str | pathlib.Path, recInfo: Recording):
-    """This checks that the folder is properly prepared
-    (i.e. the required BeGaze exports were run)
-    """
+def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> bool:
+    """Check that the folder contains the required EyeData and ScenePics files."""
     # check we have an exported gaze data file
-    file = f"EyeData_{recInfo.name}.csv"
-    if not (inputDir / file).is_file():
+    file = f"EyeData_{rec_info.name}.csv"
+    if not (input_dir / file).is_file():
         return False
 
     # check we have an exported scene video
-    file = f"ScenePics_{recInfo.name}"
-    if not (inputDir / file).is_dir():
-        return False
-
-    return True
+    file = f"ScenePics_{rec_info.name}"
+    return (input_dir / file).is_dir()
 
 
-def copySeeTrueRecording(inputDir: pathlib.Path, outputDir: pathlib.Path, recInfo: Recording):
-    """Copy the relevant files from the specified input dir to the specified output dirs"""
-    # get scene video dimensions by interrogating a frame in sceneVidDir
-    sceneVidDir = inputDir / ("ScenePics_" + recInfo.name)
-    frame = next(sceneVidDir.glob("*.jpeg"))
+def copy_see_true_recording(
+    input_dir: pathlib.Path, output_dir: pathlib.Path, rec_info: Recording
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Copy the relevant files from the specified input dir to the specified output dirs."""
+    # get scene video dimensions by interrogating a frame in scene_vid_dir
+    scene_vid_dir = input_dir / ("ScenePics_" + rec_info.name)
+    frame = next(scene_vid_dir.glob("*.jpeg"))
     h, w, _ = cv2.imread(frame).shape
 
     # prep gaze data and get video frame timestamps from it
     print("  Prepping gaze data...")
-    file = f"EyeData_{recInfo.name}.csv"
-    gazeDf, frameTimestamps = formatGazeData(inputDir / file, [w, h])
+    file = f"EyeData_{rec_info.name}.csv"
+    gaze_df, frame_timestamps = format_gaze_data(input_dir / file, [w, h])
 
     # make scene video
     print("  Prepping scene video...")
     # 1. see if there are frames missing, insert black frames if so
     frames = []
-    for f in sceneVidDir.glob("*.jpeg"):
+    for f in scene_vid_dir.glob("*.jpeg"):
         _, fr = f.stem.split("_")
         frames.append(int(fr))
     frames = sorted(frames)
 
     # 2. see if framenumbers are as expected from the gaze data file
     # get average ifi
-    ifi = np.mean(np.diff(frameTimestamps.index))
+    ifi = np.mean(np.diff(frame_timestamps.index))
     # 2.1 remove frame timestamps that are before the first frame for which we have an image
-    frameTimestamps = frameTimestamps.drop(frameTimestamps[frameTimestamps.frame_idx < frames[0]].index)
+    frame_timestamps = frame_timestamps.drop(frame_timestamps[frame_timestamps.frame_idx < frames[0]].index)
     # 2.2 remove frame timestamps that are beyond last frame for which we have an image
-    frameTimestamps = frameTimestamps.drop(frameTimestamps[frameTimestamps.frame_idx > frames[-1]].index)
+    frame_timestamps = frame_timestamps.drop(frame_timestamps[frame_timestamps.frame_idx > frames[-1]].index)
     # 2.3 add frame timestamps for images we have before first eye data
-    if frames[0] < frameTimestamps.iloc[0, :].to_numpy()[0]:
-        nFrames = frameTimestamps.iloc[0, :].to_numpy()[0] - frames[0]
-        t0 = frameTimestamps.index[0]
-        f0 = frameTimestamps.iloc[0, :].to_numpy()[0]
-        for f in range(-1, -(nFrames + 1), -1):
-            frameTimestamps.loc[t0 + f * ifi] = f0 + f
-        frameTimestamps = frameTimestamps.sort_index()
+    if frames[0] < frame_timestamps.iloc[0, :].to_numpy()[0]:
+        n_frames = frame_timestamps.iloc[0, :].to_numpy()[0] - frames[0]
+        t0 = frame_timestamps.index[0]
+        f0 = frame_timestamps.iloc[0, :].to_numpy()[0]
+        for f in range(-1, -(n_frames + 1), -1):
+            frame_timestamps.loc[t0 + f * ifi] = f0 + f
+        frame_timestamps = frame_timestamps.sort_index()
     # 2.4 add frame timestamps for images we have after last eye data
-    if frames[-1] > frameTimestamps.iloc[-1, :].to_numpy()[0]:
-        nFrames = frames[-1] - frameTimestamps.iloc[-1, :].to_numpy()[0]
-        t0 = frameTimestamps.index[-1]
-        f0 = frameTimestamps.iloc[-1, :].to_numpy()[0]
-        for f in range(1, nFrames + 1):
-            frameTimestamps.loc[t0 + f * ifi] = f0 + f
-        frameTimestamps = frameTimestamps.sort_index()
+    if frames[-1] > frame_timestamps.iloc[-1, :].to_numpy()[0]:
+        n_frames = frames[-1] - frame_timestamps.iloc[-1, :].to_numpy()[0]
+        t0 = frame_timestamps.index[-1]
+        f0 = frame_timestamps.iloc[-1, :].to_numpy()[0]
+        for f in range(1, n_frames + 1):
+            frame_timestamps.loc[t0 + f * ifi] = f0 + f
+        frame_timestamps = frame_timestamps.sort_index()
     # 2.5 check if holes, fill
-    blackFrames = []
-    frameDelta = np.diff(frames)
-    if np.any(frameDelta > 1):
+    black_frames = []
+    frame_delta = np.diff(frames)
+    if np.any(frame_delta > 1):
         # frames images missing, add them (NB: if timestamps also missing, thats dealt with below)
-        idxGaps = np.argwhere(frameDelta > 1).flatten()  # idxGaps is last idx before each gap
-        frGaps = np.array(frames)[idxGaps].flatten()
-        nFrames = frameDelta[idxGaps].flatten()
-        for b, x in zip(frGaps + 1, nFrames):
+        idx_gaps = np.argwhere(frame_delta > 1).flatten()  # idx_gaps is last idx before each gap
+        fr_gaps = np.array(frames)[idx_gaps].flatten()
+        n_frames = frame_delta[idx_gaps].flatten()
+        for b, x in zip(fr_gaps + 1, n_frames, strict=True):
             for y in range(x - 1):
-                blackFrames.append(b + y)
+                black_frames.append(b + y)
 
         # make black frame
-        blackIm = np.zeros((h, w, 3), np.uint8)  # black image
-        for f in blackFrames:
+        black_im = np.zeros((h, w, 3), np.uint8)  # black image
+        for f in black_frames:
             # store black frame to file
-            cv2.imwrite(sceneVidDir / f"frame_{f:d}.jpeg", blackIm)
+            cv2.imwrite(scene_vid_dir / f"frame_{f:d}.jpeg", black_im)
             frames.append(f)
         frames = sorted(frames)
 
     # 3. make into video
     # 3.1 find unique scene camera frames and their timestamps
-    firstFrame = frameTimestamps["frame_idx"].min()
-    firstFrameTs = frameTimestamps["frame_idx"].idxmin()
-    frameTimestamps = frameTimestamps.reset_index().groupby("frame_idx").first().reset_index()
+    first_frame = frame_timestamps["frame_idx"].min()
+    first_frame_ts = frame_timestamps["frame_idx"].idxmin()
+    frame_timestamps = frame_timestamps.reset_index().groupby("frame_idx").first().reset_index()
     # 3.2 make concat filter input file
-    concat_file = outputDir / "concat_input.txt"
-    with pathlib.Path(concat_file).open("wt") as f:
+    concat_file = output_dir / "concat_input.txt"
+    with pathlib.Path(concat_file).open("w", encoding="utf-8") as f:
         f.writelines("ffconcat version 1.0\n")
-        fnames = (f"frame_{f}.jpeg" for f in frameTimestamps["frame_idx"].to_numpy())
-        f.writelines(f"file '{sceneVidDir / fn}'\n" for fn in fnames)
+        fnames = (f"frame_{f}.jpeg" for f in frame_timestamps["frame_idx"].to_numpy())
+        f.writelines(f"file '{scene_vid_dir / fn}'\n" for fn in fnames)
 
     # 3.3 determine frame pts and durations
-    ifis = np.diff(frameTimestamps["timestamp"].to_numpy())
+    ifis = np.diff(frame_timestamps["timestamp"].to_numpy())
     ifis = np.append(ifis, [np.median(ifis)])
     durs = ifis / 1000
     pts_time = np.cumsum(np.append([0], durs))
 
     # 3.4 read frames through concat filter, output to mp4 with the right pts and dur
-    outFile = outputDir / f"{naming.scene_camera_video_fname_stem}.mp4"
+    out_file = output_dir / f"{naming.scene_camera_video_fname_stem}.mp4"
     ts = 900000
     with av.open(concat_file, "r", format="concat", options={"safe": "0"}) as inp:
         in_stream = inp.streams.video[0]
-        with av.open(outFile, "w", format="mp4") as out:
+        with av.open(out_file, "w", format="mp4") as out:
             out_stream = out.add_stream("libx264")
             out_stream.width = (
                 in_stream.codec_context.width
@@ -238,33 +234,34 @@ def copySeeTrueRecording(inputDir: pathlib.Path, outputDir: pathlib.Path, recInf
     # 3.5 clean up
     # check for success
     concat_file.unlink(missing_ok=True)
-    if outFile.is_file():
-        recInfo.scene_video_file = outFile.name
+    if out_file.is_file():
+        rec_info.scene_video_file = out_file.name
     else:
         raise RuntimeError("Error making a scene video out of the SeeTrues frames")
 
     # delete the black frames we added, if any
-    for f in blackFrames:
-        if (sceneVidDir / f"frame_{f:d}.jpeg").is_file():
-            (sceneVidDir / f"frame_{f:d}.jpeg").unlink(missing_ok=True)
+    for f in black_frames:
+        if (scene_vid_dir / f"frame_{f:d}.jpeg").is_file():
+            (scene_vid_dir / f"frame_{f:d}.jpeg").unlink(missing_ok=True)
 
     # 4. fix up frame idxs and timestamps in gaze and video data
     # prep the gaze timestamps
-    gazeDf.index -= firstFrameTs
+    gaze_df.index -= first_frame_ts
     # overwrite the video frames, now we have one video frame per gaze sample
-    gazeDf["frame_idx"] -= firstFrame
+    gaze_df["frame_idx"] -= first_frame
 
     # Also fix video timestamps
-    frameTimestamps = frameTimestamps.drop(columns=["frame_idx"])
-    frameTimestamps.index.name = "frame_idx"
-    frameTimestamps["timestamp"] -= firstFrameTs
+    frame_timestamps = frame_timestamps.drop(columns=["frame_idx"])
+    frame_timestamps.index.name = "frame_idx"
+    frame_timestamps["timestamp"] -= first_frame_ts
 
-    return gazeDf, frameTimestamps
+    return gaze_df, frame_timestamps
 
 
-def getCameraHardcoded(outputDir: str | pathlib.Path):
-    """Get camera calibration
-    Hardcoded as per info received from SeeTrue
+def get_camera_hardcoded(output_dir: str | pathlib.Path) -> None:
+    """Get camera calibration.
+
+    Hardcoded as per info received from SeeTrue.
     """
     # turn into camera matrix and distortion coefficients as used by OpenCV
     camera = {}
@@ -273,16 +270,19 @@ def getCameraHardcoded(outputDir: str | pathlib.Path):
     camera["resolution"] = np.array([640, 480])
 
     # store to file
-    fs = cv2.FileStorage(outputDir / naming.scene_camera_calibration_fname, cv2.FILE_STORAGE_WRITE)
+    fs = cv2.FileStorage(output_dir / naming.scene_camera_calibration_fname, cv2.FILE_STORAGE_WRITE)
     for key, value in camera.items():
         fs.write(name=key, val=value)
     fs.release()
 
 
-def formatGazeData(inputFile: str | pathlib.Path, sceneVideoDimensions: list[int]):
-    """Load gazedata file
-    format to get the gaze coordinates w.r.t. world camera, and timestamps for
-    every frame of video
+def format_gaze_data(
+    input_file: str | pathlib.Path, scene_video_dimensions: list[int]
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load gazedata file.
+
+    Format to get the gaze coordinates w.r.t. world camera, and timestamps for
+    every frame of video.
 
     Returns:
         - formatted dataframe with cols for timestamp, frame_idx, and gaze data
@@ -290,18 +290,18 @@ def formatGazeData(inputFile: str | pathlib.Path, sceneVideoDimensions: list[int
 
     """
     # convert the json file to pandas dataframe
-    df = gazedata2df(inputFile, sceneVideoDimensions)
+    df = gazedata2df(input_file, scene_video_dimensions)
 
     # get time stamps for scene picture numbers
-    frameTimestamps = pd.DataFrame(df["frame_idx"])
+    frame_timestamps = pd.DataFrame(df["frame_idx"])
 
     # return the gaze data df and frame time stamps array
-    return df, frameTimestamps
+    return df, frame_timestamps
 
 
-def gazedata2df(textFile: str | pathlib.Path, sceneVideoDimensions: list[int]):
-    """Convert the gazedata file to a pandas dataframe"""
-    df = pd.read_table(textFile, sep=";", index_col=False)
+def gazedata2df(text_file: str | pathlib.Path, scene_video_dimensions: list[int]) -> pd.DataFrame:
+    """Convert the gazedata file to a pandas dataframe."""
+    df = pd.read_table(text_file, sep=";", index_col=False)
     df.columns = df.columns.str.strip()
 
     # rename and reorder columns
@@ -326,8 +326,8 @@ def gazedata2df(textFile: str | pathlib.Path, sceneVideoDimensions: list[int]):
     df = df.set_index("timestamp")
 
     # turn gaze locations into pixel data with origin in top-left
-    df["gaze_pos_vid_x"] *= sceneVideoDimensions[0]
-    df["gaze_pos_vid_y"] *= sceneVideoDimensions[1]
+    df["gaze_pos_vid_x"] *= scene_video_dimensions[0]
+    df["gaze_pos_vid_y"] *= scene_video_dimensions[1]
 
     # return the dataframe
     return df

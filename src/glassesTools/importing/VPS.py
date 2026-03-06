@@ -1,9 +1,9 @@
 """Cast raw Viewpointsystem VPS 19 data into common format.
 
 The output directory will contain:
-    - frameTimestamps.tsv: frame number and corresponding timestamps for each frame in video
+    - frame_timestamps.tsv: frame number and corresponding timestamps for each frame in video
     - worldCamera.mp4: the video from the point-of-view scene camera on the glasses
-    - gazeData.tsv: gaze data, where all 2D gaze coordinates are represented w/r/t the world camera,
+    - gaze_data.tsv: gaze data, where all 2D gaze coordinates are represented w/r/t the world camera,
                     and 3D coordinates in the coordinate frame of the glasses (may need rotation/translation
                     to represent in world camera's coordinate frame)
 """
@@ -20,19 +20,20 @@ from ..eyetracker import EyeTracker
 from ..recording import Recording
 
 
-def preprocessData(
-    output_dir: str | pathlib.Path = None,
-    device: str | EyeTracker = None,
-    source_dir: str | pathlib.Path = None,
-    rec_info: Recording = None,
-    copy_scene_video=True,
-    source_dir_as_relative_path=False,
-    cam_cal_file: str | pathlib.Path = None,
+def preprocess_data(
+    output_dir: str | pathlib.Path | None = None,
+    device: str | EyeTracker | None = None,
+    source_dir: str | pathlib.Path | None = None,
+    rec_info: Recording | None = None,
+    copy_scene_video: bool = True,
+    source_dir_as_relative_path: bool = False,
+    cam_cal_file: str | pathlib.Path | None = None,
 ) -> Recording:
+    """Run all preprocessing steps on VPS data and store in output_dir."""
     from . import _store_data, check_device, check_folders
 
     device, rec_info, _ = check_device(device, rec_info)
-    if device not in [EyeTracker.VPS_19, EyeTracker.VPS_Lite]:
+    if device not in {EyeTracker.VPS_19, EyeTracker.VPS_Lite}:
         raise ValueError(
             f"Provided device ({rec_info.eye_tracker.value}) is not a {EyeTracker.VPS_19.value} or a {EyeTracker.VPS_Lite.value}."
         )
@@ -43,9 +44,9 @@ def preprocessData(
     print("  Check and copy raw data...")
     # check tobii recording and get export directory
     if rec_info is not None:
-        checkRecording(device, source_dir, rec_info)
+        check_recording(device, source_dir, rec_info)
     else:
-        rec_info = getRecordingInfo(source_dir)
+        rec_info = get_recording_info(source_dir)
         if rec_info is None:
             raise RuntimeError(f"The folder {source_dir} is not recognized as a {device.value} recording.")
 
@@ -54,7 +55,7 @@ def preprocessData(
         output_dir.mkdir()
 
     # copy the raw data to the output directory
-    copyVPSRecording(device, source_dir, output_dir, rec_info, copy_scene_video)
+    copy_vps_recording(device, source_dir, output_dir, rec_info, copy_scene_video)
 
     # prep the copied data...
     print("  Getting camera calibration...")
@@ -63,16 +64,18 @@ def preprocessData(
     else:
         print("    !! No camera calibration provided!")
     print("  Prepping gaze data...")
-    gazeDf, frameTimestamps = formatGazeData(source_dir, rec_info)
+    gaze_df, frame_timestamps = format_gaze_data(source_dir, rec_info)
 
-    _store_data(output_dir, gazeDf, frameTimestamps, rec_info, source_dir_as_relative_path=source_dir_as_relative_path)
+    _store_data(
+        output_dir, gaze_df, frame_timestamps, rec_info, source_dir_as_relative_path=source_dir_as_relative_path
+    )
 
     return rec_info
 
 
-def getRecordingInfo(inputDir: str | pathlib.Path, device: EyeTracker) -> Recording:
-    # get recordings. A folder can contain multiple recordings.
-    inputDir = pathlib.Path(inputDir)
+def get_recording_info(input_dir: str | pathlib.Path, device: EyeTracker) -> list[Recording] | None:
+    """Return recording info for the given directory, or None if not a valid recording."""
+    input_dir = pathlib.Path(input_dir)
 
     if device == EyeTracker.VPS_19:
         vid_exts = [".mkv", ".mp4"]
@@ -80,85 +83,88 @@ def getRecordingInfo(inputDir: str | pathlib.Path, device: EyeTracker) -> Record
         vid_exts = [".mp4"]
     # recordings are identified as a tsv and an mkv file with the
     # same name
-    recInfos: list[Recording] = []
-    for r in inputDir.glob("*.tsv"):
+    rec_infos: list[Recording] = []
+    for r in input_dir.glob("*.tsv"):
         if not any(r.with_suffix(ext).is_file() for ext in vid_exts):
             continue
         # get more info
-        with pathlib.Path(r).open() as f:
+        with pathlib.Path(r).open(encoding="utf-8") as f:
             lines = []
             for _ in range(5):
                 lines.append(f.readline())
-        uInfo = json.loads(
+        u_info = json.loads(
             lines[4].removeprefix("# system").removeprefix(":")
         )  # info about the system, remove : separately as it seems only VPS 19 and not VPS Lite has it
         # a VPS 19 recording will have a 'Smart Unit' entry
-        if device == EyeTracker.VPS_19 and "Smart Unit" not in uInfo:
+        if device == EyeTracker.VPS_19 and "Smart Unit" not in u_info:
             continue
         # a VPS Lite recording will have a 'Lite Unit' entry
-        if device == EyeTracker.VPS_Lite and "Lite Unit" not in uInfo:
+        if device == EyeTracker.VPS_Lite and "Lite Unit" not in u_info:
             continue
-        recInfos.append(Recording(source_directory=inputDir, eye_tracker=device))
-        recInfos[-1].name = r.stem
+        rec_infos.append(Recording(source_directory=input_dir, eye_tracker=device))
+        rec_infos[-1].name = r.stem
         time_string = lines[2][len("# Recording start: ") :].strip()
-        recInfos[-1].start_time = timestamps.Timestamp(int(datetime.datetime.fromisoformat(time_string).timestamp()))
-        recInfos[-1].glasses_serial = uInfo["glasses"]
-        recInfos[-1].recording_unit_serial = uInfo["Smart Unit"] if device == EyeTracker.VPS_19 else uInfo["Lite Unit"]
-        recInfos[-1].firmware_version = uInfo["operating system"]
+        rec_infos[-1].start_time = timestamps.Timestamp(int(datetime.datetime.fromisoformat(time_string).timestamp()))
+        rec_infos[-1].glasses_serial = u_info["glasses"]
+        rec_infos[-1].recording_unit_serial = (
+            u_info["Smart Unit"] if device == EyeTracker.VPS_19 else u_info["Lite Unit"]
+        )
+        rec_infos[-1].firmware_version = u_info["operating system"]
 
     # should return None if no valid recordings found
-    return recInfos or None
+    return rec_infos or None
 
 
-def checkRecording(device: EyeTracker, inputDir: str | pathlib.Path, recInfo: Recording):
-    # check we have an exported gaze data file
-    inputDir = pathlib.Path(inputDir)
+def check_recording(device: EyeTracker, input_dir: str | pathlib.Path, rec_info: Recording) -> bool:
+    """Check that the expected recording files exist on disk."""
+    input_dir = pathlib.Path(input_dir)
 
     if device == EyeTracker.VPS_19:
         vid_exts = [".mkv", ".mp4"]
     elif device == EyeTracker.VPS_Lite:
         vid_exts = [".mp4"]
 
-    def _raise_if_file_doesnt_exist(file: str | pathlib.Path):
-        if not (inputDir / file).is_file():
-            raise RuntimeError(f"Recording {recInfo.name} not found: {file} file not found in {inputDir}.")
+    def _raise_if_file_doesnt_exist(file: str | pathlib.Path) -> None:
+        if not (input_dir / file).is_file():
+            raise RuntimeError(f"Recording {rec_info.name} not found: {file} file not found in {input_dir}.")
 
-    _raise_if_file_doesnt_exist(f"{recInfo.name}.tsv")
-    if not any((inputDir / f"{recInfo.name}{ext}").is_file() for ext in vid_exts):
+    _raise_if_file_doesnt_exist(f"{rec_info.name}.tsv")
+    if not any((input_dir / f"{rec_info.name}{ext}").is_file() for ext in vid_exts):
         raise RuntimeError(
-            f"Recording {recInfo.name} not found: no {recInfo.name}.ext video file found in {inputDir} where ext is one of the expected extensions: {vid_exts}."
+            f"Recording {rec_info.name} not found: no {rec_info.name}.ext video file found in {input_dir} where ext is one of the expected extensions: {vid_exts}."
         )
 
     return True
 
 
-def copyVPSRecording(
-    device: EyeTracker, inputDir: pathlib.Path, outputDir: pathlib.Path, recInfo: Recording, copy_scene_video: bool
-):
-    """Copy the relevant files from the specified input dir to the specified output dir"""
+def copy_vps_recording(
+    device: EyeTracker, input_dir: pathlib.Path, output_dir: pathlib.Path, rec_info: Recording, copy_scene_video: bool
+) -> None:
+    """Copy the relevant files from the specified input dir to the specified output dir."""
     # Copy relevant files to new directory
     if device == EyeTracker.VPS_19:
-        srcFile = inputDir / f"{recInfo.name}.mkv"
-        if not srcFile.is_file():
-            srcFile = inputDir / f"{recInfo.name}.mp4"
+        src_file = input_dir / f"{rec_info.name}.mkv"
+        if not src_file.is_file():
+            src_file = input_dir / f"{rec_info.name}.mp4"
     elif device == EyeTracker.VPS_Lite:
-        srcFile = inputDir / f"{recInfo.name}.mp4"
+        src_file = input_dir / f"{rec_info.name}.mp4"
 
     if copy_scene_video:
-        destFile = outputDir / f"{naming.scene_camera_video_fname_stem}{srcFile.suffix}"
-        shutil.copy2(srcFile, destFile)
+        dest_file = output_dir / f"{naming.scene_camera_video_fname_stem}{src_file.suffix}"
+        shutil.copy2(src_file, dest_file)
     else:
-        destFile = None
+        dest_file = None
 
-    if destFile:
-        recInfo.scene_video_file = destFile.name
+    if dest_file:
+        rec_info.scene_video_file = dest_file.name
     else:
-        recInfo.scene_video_file = srcFile.name
+        rec_info.scene_video_file = src_file.name
 
 
-def formatGazeData(inputDir: str | pathlib.Path, recInfo: Recording):
-    """Load gazedata json file
-    format to get the gaze coordinates w/r/t world camera, and timestamps for every frame of video
+def format_gaze_data(input_dir: str | pathlib.Path, rec_info: Recording) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load gazedata tsv file.
+
+    Format to get the gaze coordinates w/r/t world camera, and timestamps for every frame of video.
 
     Returns:
         - formatted dataframe with cols for timestamp, frame_idx, and gaze data
@@ -166,21 +172,21 @@ def formatGazeData(inputDir: str | pathlib.Path, recInfo: Recording):
 
     """
     # convert the json file to pandas dataframe
-    df = gaze2df(inputDir / f"{recInfo.name}.tsv")
+    df = gaze2df(input_dir / f"{rec_info.name}.tsv")
 
     # read video file, create array of frame timestamps
-    frameTimestamps = video_utils.get_frame_timestamps_from_video(recInfo.get_scene_video_path())
+    frame_timestamps = video_utils.get_frame_timestamps_from_video(rec_info.get_scene_video_path())
 
     # return the gaze data df and frame time stamps array
-    return df, frameTimestamps
+    return df, frame_timestamps
 
 
-def gaze2df(gazeFile: str | pathlib.Path) -> pd.DataFrame:
+def gaze2df(gaze_file: str | pathlib.Path) -> pd.DataFrame:
     """Convert the .tsv file to a pandas dataframe"""
-    df = pd.read_csv(gazeFile, delimiter="\t", comment="#", index_col=False)
+    df = pd.read_csv(gaze_file, delimiter="\t", comment="#", index_col=False)
 
     # get time sync info
-    t0 = df["FrontTimeStamp"].iat[0] - df["MediaTimeStamp"].iat[0]
+    t0 = df["FrontTimeStamp"].iloc[0] - df["MediaTimeStamp"].iloc[0]
 
     # rename and reorder columns
     lookup = {

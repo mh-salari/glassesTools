@@ -15,19 +15,17 @@ from ..eyetracker import EyeTracker
 from ..recording import Recording
 
 
-def preprocessData(
-    output_dir: str | pathlib.Path = None,
-    source_dir: str | pathlib.Path = None,
-    rec_info: Recording = None,
-    copy_scene_video=True,
-    source_dir_as_relative_path=False,
-    cam_cal_file: str | pathlib.Path = None,
+def preprocess_data(
+    output_dir: str | pathlib.Path | None = None,
+    source_dir: str | pathlib.Path | None = None,
+    rec_info: Recording | None = None,
+    copy_scene_video: bool = True,
+    source_dir_as_relative_path: bool = False,
+    cam_cal_file: str | pathlib.Path | None = None,
 ) -> Recording:
+    """Run all preprocessing steps on AdHawk MindLink data and store in output_dir."""
     from . import _store_data, check_folders
 
-    """
-    Run all preprocessing steps on AdHawk MindLink data and store in output_dir
-    """
     output_dir, source_dir, rec_info, _ = check_folders(output_dir, source_dir, rec_info, EyeTracker.AdHawk_MindLink)
     print(f"processing: {source_dir.name} -> {output_dir}")
 
@@ -35,9 +33,9 @@ def preprocessData(
     print("  Check and copy raw data...")
     # check adhawk recording and get export directory
     if rec_info is not None:
-        checkRecording(source_dir, rec_info)
+        check_recording(source_dir, rec_info)
     else:
-        rec_info = getRecordingInfo(source_dir)
+        rec_info = get_recording_info(source_dir)
         if rec_info is None:
             raise RuntimeError(
                 f"The folder {source_dir} is not recognized as a {EyeTracker.AdHawk_MindLink.value} recording."
@@ -48,47 +46,49 @@ def preprocessData(
         output_dir.mkdir()
 
     # copy the raw data to the output directory
-    srcVid, destVid = copyAdhawkRecording(source_dir, output_dir, copy_scene_video)
-    if destVid:
-        rec_info.scene_video_file = destVid.name
+    src_vid, dest_vid = copy_adhawk_recording(source_dir, output_dir, copy_scene_video)
+    if dest_vid:
+        rec_info.scene_video_file = dest_vid.name
     else:
-        rec_info.scene_video_file = srcVid.name
+        rec_info.scene_video_file = src_vid.name
 
     # prep the copied data...
     print("  Getting camera calibration...")
     if cam_cal_file is not None:
         shutil.copyfile(str(cam_cal_file), str(output_dir / naming.scene_camera_calibration_fname))
-        sceneVideoDimensions = np.array([1280, 720])
+        scene_video_dimensions = np.array([1280, 720])
     else:
         print("    !! No camera calibration provided! Defaulting to hardcoded")
-        sceneVideoDimensions = getCameraHardcoded(output_dir)
+        scene_video_dimensions = get_camera_hardcoded(output_dir)
     print("  Prepping gaze data...")
-    gazeDf, frameTimestamps = formatGazeData(source_dir, sceneVideoDimensions, rec_info)
+    gaze_df, frame_timestamps = format_gaze_data(source_dir, scene_video_dimensions, rec_info)
 
-    _store_data(output_dir, gazeDf, frameTimestamps, rec_info, source_dir_as_relative_path=source_dir_as_relative_path)
+    _store_data(
+        output_dir, gaze_df, frame_timestamps, rec_info, source_dir_as_relative_path=source_dir_as_relative_path
+    )
 
     return rec_info
 
 
-def getRecordingInfo(inputDir: str | pathlib.Path) -> Recording:
-    # returns None if not a recording directory
-    inputDir = pathlib.Path(inputDir)
-    recInfo = Recording(source_directory=inputDir, eye_tracker=EyeTracker.AdHawk_MindLink)
+def get_recording_info(input_dir: str | pathlib.Path) -> Recording | None:
+    """Return recording info for the given directory, or None if not a valid recording."""
+    input_dir = pathlib.Path(input_dir)
+    rec_info = Recording(source_directory=input_dir, eye_tracker=EyeTracker.AdHawk_MindLink)
 
     # get recording info
-    recInfo.name = inputDir.name
+    rec_info.name = input_dir.name
 
-    file = inputDir / "meta_data.json"
+    file = input_dir / "meta_data.json"
     if not file.is_file():
         return None
     with pathlib.Path(file).open("rb") as j:
-        rInfo = json.load(j)
-    recInfo.duration = float(rInfo["manifest"]["recording_length_ms"])
-    recInfo.participant = rInfo["user_profile"]["name"]
+        r_info = json.load(j)
+    rec_info.duration = float(r_info["manifest"]["recording_length_ms"])
+    rec_info.participant = r_info["user_profile"]["name"]
     # get recording start time by reading UTC time associated with first gaze sample
-    gaze_entry = getMetaEntry(inputDir, "gaze")
-    file = inputDir / gaze_entry["file_name"]
-    with pathlib.Path(file).open() as read_obj:
+    gaze_entry = get_meta_entry(input_dir, "gaze")
+    file = input_dir / gaze_entry["file_name"]
+    with pathlib.Path(file).open(encoding="utf-8") as read_obj:
         csv_reader = csv.DictReader(read_obj)
         # Iterate over each row in the csv using reader object
         sample = next(csv_reader)
@@ -96,27 +96,29 @@ def getRecordingInfo(inputDir: str | pathlib.Path) -> Recording:
     if time_string[-1:] == "Z":
         # change Z suffix (if any) to +00:00 for ISO 8601 format that datetime understands
         time_string = time_string[:-1] + "+00:00"
-    recInfo.start_time = timestamps.Timestamp(int(datetime.datetime.fromisoformat(time_string).timestamp()))
+    rec_info.start_time = timestamps.Timestamp(int(datetime.datetime.fromisoformat(time_string).timestamp()))
 
     # we got a valid recording and at least some info if we got here
     # return what we've got
-    return recInfo
+    return rec_info
 
 
-def getMeta(inputDir: str | pathlib.Path, key: str = None):
-    file = inputDir / "meta_data.json"
+def get_meta(input_dir: str | pathlib.Path, key: str | None = None) -> dict | None:
+    """Read meta_data.json and return the full dict or a specific key."""
+    file = input_dir / "meta_data.json"
     if not file.is_file():
         return None
     with pathlib.Path(file).open("rb") as j:
-        rInfo = json.load(j)
+        r_info = json.load(j)
 
     if key:
-        return rInfo[key]
-    return rInfo
+        return r_info[key]
+    return r_info
 
 
-def getMetaEntry(inputDir: str | pathlib.Path, entry_name: str):
-    manifest = getMeta(inputDir, key="manifest")
+def get_meta_entry(input_dir: str | pathlib.Path, entry_name: str) -> dict | None:
+    """Return the manifest entry matching the given type name."""
+    manifest = get_meta(input_dir, key="manifest")
     # get gaze file
     entry = None
     for e in manifest["entries"]:
@@ -126,41 +128,47 @@ def getMetaEntry(inputDir: str | pathlib.Path, entry_name: str):
     return entry
 
 
-def checkRecording(inputDir: str | pathlib.Path, recInfo: Recording):
-    actualRecInfo = getRecordingInfo(inputDir)
-    if actualRecInfo is None or recInfo.name != actualRecInfo.name:
-        raise ValueError(f'A recording with the name "{recInfo.name}" was not found in the folder {inputDir}.')
+def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> None:
+    """Validate that rec_info matches the actual recording on disk."""
+    actual_rec_info = get_recording_info(input_dir)
+    if actual_rec_info is None or rec_info.name != actual_rec_info.name:
+        raise ValueError(f'A recording with the name "{rec_info.name}" was not found in the folder {input_dir}.')
 
-    # make sure caller did not mess with recInfo
-    if recInfo.participant != actualRecInfo.participant:
+    # make sure caller did not mess with rec_info
+    if rec_info.participant != actual_rec_info.participant:
         raise ValueError(
-            f'A recording with the participant "{recInfo.participant}" was not found in the folder {inputDir}.'
+            f'A recording with the participant "{rec_info.participant}" was not found in the folder {input_dir}.'
         )
-    if recInfo.duration != actualRecInfo.duration:
-        raise ValueError(f'A recording with the duration "{recInfo.duration}" was not found in the folder {inputDir}.')
-    if recInfo.start_time.value != actualRecInfo.start_time.value:
+    if rec_info.duration != actual_rec_info.duration:
         raise ValueError(
-            f'A recording with the start_time "{recInfo.start_time.display}" was not found in the folder {inputDir}.'
+            f'A recording with the duration "{rec_info.duration}" was not found in the folder {input_dir}.'
+        )
+    if rec_info.start_time.value != actual_rec_info.start_time.value:
+        raise ValueError(
+            f'A recording with the start_time "{rec_info.start_time.display}" was not found in the folder {input_dir}.'
         )
 
 
-def copyAdhawkRecording(inputDir: pathlib.Path, outputDir: pathlib.Path, copy_scene_video: bool):
-    """Copy the relevant files from the specified input dir to the specified output dir"""
+def copy_adhawk_recording(
+    input_dir: pathlib.Path, output_dir: pathlib.Path, copy_scene_video: bool
+) -> tuple[pathlib.Path, pathlib.Path | None]:
+    """Copy the relevant files from the specified input dir to the specified output dir."""
     # figure out what the video file is called
-    vid_entry = getMetaEntry(inputDir, "video")
-    srcFile = inputDir / vid_entry["file_name"]
+    vid_entry = get_meta_entry(input_dir, "video")
+    src_file = input_dir / vid_entry["file_name"]
     if copy_scene_video:
-        destFile = outputDir / f"{naming.scene_camera_video_fname_stem}.mp4"
-        shutil.copy2(str(srcFile), str(destFile))
+        dest_file = output_dir / f"{naming.scene_camera_video_fname_stem}.mp4"
+        shutil.copy2(str(src_file), str(dest_file))
     else:
-        destFile = None
+        dest_file = None
 
-    return srcFile, destFile
+    return src_file, dest_file
 
 
-def getCameraHardcoded(outputDir: str | pathlib.Path):
-    """Get camera calibration
-    Hardcoded as per info received from AdHawk
+def get_camera_hardcoded(output_dir: str | pathlib.Path) -> np.ndarray:
+    """Get camera calibration.
+
+    Hardcoded as per info received from AdHawk.
     """
     # turn into camera matrix and distortion coefficients as used by OpenCV
     camera = {}
@@ -184,7 +192,7 @@ def getCameraHardcoded(outputDir: str | pathlib.Path):
     camera["rotation"] = cv2.Rodrigues(np.radians(np.array([12.000000000000043, 0.0, 0.0])))[0]
 
     # store to file
-    fs = cv2.FileStorage(outputDir / naming.scene_camera_calibration_fname, cv2.FILE_STORAGE_WRITE)
+    fs = cv2.FileStorage(output_dir / naming.scene_camera_calibration_fname, cv2.FILE_STORAGE_WRITE)
     for key, value in camera.items():
         fs.write(name=key, val=value)
     fs.release()
@@ -192,9 +200,12 @@ def getCameraHardcoded(outputDir: str | pathlib.Path):
     return camera["resolution"]
 
 
-def formatGazeData(inputDir: str | pathlib.Path, sceneVideoDimensions: list[int], recInfo: Recording):
-    """Load gazedata json file
-    format to get the gaze coordinates w/r/t world camera, and timestamps for every frame of video
+def format_gaze_data(
+    input_dir: str | pathlib.Path, scene_video_dimensions: list[int], rec_info: Recording
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load gazedata csv file.
+
+    Format to get the gaze coordinates w/r/t world camera, and timestamps for every frame of video.
 
     Returns:
         - formatted dataframe with cols for timestamp, frame_idx, and gaze data
@@ -202,21 +213,21 @@ def formatGazeData(inputDir: str | pathlib.Path, sceneVideoDimensions: list[int]
 
     """
     # convert the json file to pandas dataframe
-    df = csv2df(inputDir, sceneVideoDimensions)
+    df = csv2df(input_dir, scene_video_dimensions)
 
     # read video file, create array of frame timestamps
-    frameTimestamps = video_utils.get_frame_timestamps_from_video(recInfo.get_scene_video_path())
+    frame_timestamps = video_utils.get_frame_timestamps_from_video(rec_info.get_scene_video_path())
 
     # return the gaze data df and frame time stamps array
-    return df, frameTimestamps
+    return df, frame_timestamps
 
 
-def csv2df(inputDir: str | pathlib.Path, sceneVideoDimensions: list[int]):
-    """Convert the gaze_data.csv file to a pandas dataframe"""
-    vid_entry = getMetaEntry(inputDir, "video")
-    gaze_entry = getMetaEntry(inputDir, "gaze")
+def csv2df(input_dir: str | pathlib.Path, scene_video_dimensions: list[int]) -> pd.DataFrame:
+    """Convert the gaze_data.csv file to a pandas dataframe."""
+    vid_entry = get_meta_entry(input_dir, "video")
+    gaze_entry = get_meta_entry(input_dir, "gaze")
 
-    file = inputDir / gaze_entry["file_name"]
+    file = input_dir / gaze_entry["file_name"]
     df = pd.read_csv(file)
 
     # prepare data frame
@@ -248,10 +259,10 @@ def csv2df(inputDir: str | pathlib.Path, sceneVideoDimensions: list[int]):
     df = df[idx]
 
     # get gaze vector origins
-    pp_entry = getMetaEntry(inputDir, "pupil_position")
-    file = inputDir / pp_entry["file_name"]
-    dfP = pd.read_csv(file)
-    dfP = dfP.drop(columns=["UTC_Time"], errors="ignore")  # drop these columns if they exist
+    pp_entry = get_meta_entry(input_dir, "pupil_position")
+    file = input_dir / pp_entry["file_name"]
+    df_p = pd.read_csv(file)
+    df_p = df_p.drop(columns=["UTC_Time"], errors="ignore")  # drop these columns if they exist
     # rename and reorder columns
     lookup = {
         "Timestamp": "timestamp",
@@ -262,14 +273,14 @@ def csv2df(inputDir: str | pathlib.Path, sceneVideoDimensions: list[int]):
         "Pupil_Pos_Y_Right": "gaze_ori_r_y",
         "Pupil_Pos_Z_Right": "gaze_ori_r_z",
     }
-    dfP = dfP.rename(columns=lookup)
+    df_p = df_p.rename(columns=lookup)
     # reorder
-    idx = [lookup[k] for k in lookup if lookup[k] in dfP.columns]
-    idx.extend([x for x in dfP.columns if x not in idx])  # append columns not in lookup
-    dfP = dfP[idx]
+    idx = [lookup[k] for k in lookup if lookup[k] in df_p.columns]
+    idx.extend([x for x in df_p.columns if x not in idx])  # append columns not in lookup
+    df_p = df_p[idx]
 
     # merge
-    df = pd.merge(df, dfP, on="timestamp")
+    df = df.merge(df_p, on="timestamp")
 
     # convert timestamps from s to ms and set as index
     df.loc[:, "timestamp"] *= 1000.0
@@ -282,8 +293,8 @@ def csv2df(inputDir: str | pathlib.Path, sceneVideoDimensions: list[int]):
     df = df.set_index("timestamp")
 
     # binocular gaze data
-    df.loc[:, "gaze_pos_vid_x"] *= sceneVideoDimensions[0]
-    df.loc[:, "gaze_pos_vid_y"] *= sceneVideoDimensions[1]
+    df.loc[:, "gaze_pos_vid_x"] *= scene_video_dimensions[0]
+    df.loc[:, "gaze_pos_vid_y"] *= scene_video_dimensions[1]
 
     # adhawk positive z is backward, ours is forward
     df.loc[:, "gaze_ori_l_z"] = -df.loc[:, "gaze_ori_l_z"]

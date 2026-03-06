@@ -169,3 +169,6 @@ lint.ignore = [
 "src/glassesTools/gaze_overlay_video.py" = ["S404", "S603", "S605"]  # legitimate ffprobe/ffmpeg subprocess calls
 "src/glassesTools/file_actions.py" = ["N801", "N806", "ARG001", "ANN401", "S110", "SIM105", "SIM108", "DTZ006"]  # Win32 API naming conventions (NETRESOURCE, hEnum etc.); ctypes errcheck callbacks have fixed signatures and use Any; try-except-pass for best-effort cleanup; ternary hurts readability here; local timestamps intentional
 "src/glassesTools/video_utils.py" = ["S404", "S603"]  # legitimate ffprobe subprocess calls
+"src/glassesTools/importing/*.py" = ["PLC0415"]  # deferred imports avoid circular dependencies
+"src/glassesTools/importing/argus_ETVision.py" = ["TD002", "TD003", "FIX002"]  # existing TODO for unmapped columns
+"src/glassesTools/importing/__init__.py" = ["RUF067", "PLC0415", "N812", "N802"]  # functions defined in __init__ by design; deferred imports; import aliases and function names match EyeTracker enum values

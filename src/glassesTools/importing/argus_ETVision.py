@@ -1,9 +1,9 @@
 """Cast Argus Science ETVision data into common format.
 
 The output directory will contain:
-    - frameTimestamps.tsv: frame number and corresponding timestamps for each frame in video
+    - frame_timestamps.tsv: frame number and corresponding timestamps for each frame in video
     - worldCamera.mp4: the video from the point-of-view scene camera on the glasses
-    - gazeData.tsv: gaze data, where all 2D gaze coordinates are represented w/r/t the world camera,
+    - gaze_data.tsv: gaze data, where all 2D gaze coordinates are represented w/r/t the world camera,
                     and 3D coordinates in the coordinate frame of the glasses (may need rotation/translation
                     to represent in world camera's coordinate frame)
 """
@@ -19,14 +19,15 @@ from ..eyetracker import EyeTracker
 from ..recording import Recording
 
 
-def preprocessData(
-    output_dir: str | pathlib.Path = None,
-    source_dir: str | pathlib.Path = None,
-    rec_info: Recording = None,
-    copy_scene_video=True,
-    source_dir_as_relative_path=False,
-    cam_cal_file: str | pathlib.Path = None,
+def preprocess_data(
+    output_dir: str | pathlib.Path | None = None,
+    source_dir: str | pathlib.Path | None = None,
+    rec_info: Recording | None = None,
+    copy_scene_video: bool = True,
+    source_dir_as_relative_path: bool = False,
+    cam_cal_file: str | pathlib.Path | None = None,
 ) -> Recording:
+    """Run all preprocessing steps on Argus ETVision data and store in output_dir."""
     from . import _store_data, check_folders
 
     output_dir, source_dir, rec_info, _ = check_folders(output_dir, source_dir, rec_info, EyeTracker.Argus_ETVision)
@@ -36,9 +37,9 @@ def preprocessData(
     print("  Check and copy raw data...")
     # check tobii recording and get export directory
     if rec_info is not None:
-        checkRecording(source_dir, rec_info)
+        check_recording(source_dir, rec_info)
     else:
-        rec_info = getRecordingInfo(source_dir)
+        rec_info = get_recording_info(source_dir)
         if rec_info is None:
             raise RuntimeError(
                 f"The folder {source_dir} is not recognized as a {EyeTracker.Argus_ETVision.value} recording."
@@ -49,7 +50,7 @@ def preprocessData(
         output_dir.mkdir()
 
     # copy the raw data to the output directory
-    copyETVisionRecording(source_dir, output_dir, rec_info, copy_scene_video)
+    copy_et_vision_recording(source_dir, output_dir, rec_info, copy_scene_video)
 
     # prep the copied data...
     print("  Getting camera calibration...")
@@ -58,70 +59,75 @@ def preprocessData(
     else:
         print("    !! No camera calibration provided!")
     print("  Prepping gaze data...")
-    gazeDf, frameTimestamps = formatGazeData(source_dir, rec_info)
+    gaze_df, frame_timestamps = format_gaze_data(source_dir, rec_info)
 
-    _store_data(output_dir, gazeDf, frameTimestamps, rec_info, source_dir_as_relative_path=source_dir_as_relative_path)
+    _store_data(
+        output_dir, gaze_df, frame_timestamps, rec_info, source_dir_as_relative_path=source_dir_as_relative_path
+    )
 
     return rec_info
 
 
-def getRecordingInfo(inputDir: str | pathlib.Path) -> Recording:
-    # get recordings. If i understand correctly, a folder can contain multiple recordings.
-    inputDir = pathlib.Path(inputDir)
+def get_recording_info(input_dir: str | pathlib.Path) -> list[Recording] | None:
+    """Return recording info for the given directory, or None if not a valid recording."""
+    input_dir = pathlib.Path(input_dir)
     # recordings are identified as a tsv and an mkv file with the
     # same name
-    recInfos: list[Recording] = []
-    for r in inputDir.glob("*.csv"):
+    rec_infos: list[Recording] = []
+    for r in input_dir.glob("*.csv"):
         if not r.with_name(f"{r.stem}_Scene.wmv").is_file():
             continue
-        recInfos.append(Recording(source_directory=inputDir, eye_tracker=EyeTracker.Argus_ETVision))
-        recInfos[-1].name = r.stem
+        rec_infos.append(Recording(source_directory=input_dir, eye_tracker=EyeTracker.Argus_ETVision))
+        rec_infos[-1].name = r.stem
         # get more info from first line
-        with pathlib.Path(r).open() as f:
+        with pathlib.Path(r).open(encoding="utf-8") as f:
             line = f.readline()
         for s in line.strip().split(","):
             if "ETVision" in s:
-                recInfos[-1].firmware_version = s[len("ETVision: ") :].strip()
+                rec_infos[-1].firmware_version = s[len("ETVision: ") :].strip()
             elif "Start_Recording" in s:
                 time_string = s[len("Start_Recording: ") :].strip()
-                recInfos[-1].start_time = timestamps.Timestamp(
+                rec_infos[-1].start_time = timestamps.Timestamp(
                     int(datetime.datetime.fromisoformat(time_string).timestamp())
                 )
 
     # should return None if no valid recordings found
-    return recInfos or None
+    return rec_infos or None
 
 
-def checkRecording(inputDir: str | pathlib.Path, recInfo: Recording):
-    # check we have the expected file
+def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> bool:
+    """Check that the expected recording files exist on disk."""
     for suff in (".csv", "_Scene.wmv"):
-        file = f"{recInfo.name}{suff}"
-        if not (inputDir / file).is_file():
-            raise RuntimeError(f"Recording {recInfo.name} not found: {file} file not found in {inputDir}.")
+        file = f"{rec_info.name}{suff}"
+        if not (input_dir / file).is_file():
+            raise RuntimeError(f"Recording {rec_info.name} not found: {file} file not found in {input_dir}.")
 
     return True
 
 
-def copyETVisionRecording(inputDir: pathlib.Path, outputDir: pathlib.Path, recInfo: Recording, copy_scene_video: bool):
-    """Copy the relevant files from the specified input dir to the specified output dir"""
+def copy_et_vision_recording(
+    input_dir: pathlib.Path, output_dir: pathlib.Path, rec_info: Recording, copy_scene_video: bool
+) -> None:
+    """Copy the relevant files from the specified input dir to the specified output dir."""
     # Copy relevant files to new directory
-    srcFile = inputDir / f"{recInfo.name}_Scene.wmv"
+    src_file = input_dir / f"{rec_info.name}_Scene.wmv"
 
     if copy_scene_video:
-        destFile = outputDir / f"{naming.scene_camera_video_fname_stem}.wmv"
-        shutil.copy2(srcFile, destFile)
+        dest_file = output_dir / f"{naming.scene_camera_video_fname_stem}.wmv"
+        shutil.copy2(src_file, dest_file)
     else:
-        destFile = None
+        dest_file = None
 
-    if destFile:
-        recInfo.scene_video_file = destFile.name
+    if dest_file:
+        rec_info.scene_video_file = dest_file.name
     else:
-        recInfo.scene_video_file = srcFile.name
+        rec_info.scene_video_file = src_file.name
 
 
-def formatGazeData(inputDir: str | pathlib.Path, recInfo: Recording):
-    """Load gazedata json file
-    format to get the gaze coordinates w/r/t world camera, and timestamps for every frame of video
+def format_gaze_data(input_dir: str | pathlib.Path, rec_info: Recording) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load gaze data csv file.
+
+    Format to get the gaze coordinates w/r/t world camera, and timestamps for every frame of video.
 
     Returns:
         - formatted dataframe with cols for timestamp, frame_idx, and gaze data
@@ -129,22 +135,22 @@ def formatGazeData(inputDir: str | pathlib.Path, recInfo: Recording):
 
     """
     # convert the json file to pandas dataframe
-    df = gaze2df(pathlib.Path(inputDir) / f"{recInfo.name}.csv")
+    df = gaze2df(pathlib.Path(input_dir) / f"{rec_info.name}.csv")
 
     # read video file, create array of frame timestamps
-    frameTimestamps = video_utils.get_frame_timestamps_from_video(recInfo.get_scene_video_path())
+    frame_timestamps = video_utils.get_frame_timestamps_from_video(rec_info.get_scene_video_path())
 
     # use the frame timestamps to assign a frame number to each data point
-    frameIdx = video_utils.timestamps_to_frame_number(df.index, frameTimestamps["timestamp"].to_numpy())
-    df.insert(0, "frame_idx", frameIdx["frame_idx"])
+    frame_idx = video_utils.timestamps_to_frame_number(df.index, frame_timestamps["timestamp"].to_numpy())
+    df.insert(0, "frame_idx", frame_idx["frame_idx"])
 
     # return the gaze data df and frame time stamps array
-    return df, frameTimestamps
+    return df, frame_timestamps
 
 
-def gaze2df(gazeFile: str | pathlib.Path) -> pd.DataFrame:
+def gaze2df(gaze_file: str | pathlib.Path) -> pd.DataFrame:
     """Convert the .tsv file to a pandas dataframe"""
-    df = pd.read_csv(gazeFile, index_col=False, skiprows=1)
+    df = pd.read_csv(gaze_file, index_col=False, skiprows=1)
 
     # rename and reorder columns
     # TODO: verg_gaze_coord_x verg_gaze_coord_y verg_gaze_coord_z left_eye_location_x right_eye_location_x left_eye_location_y right_eye_location_y left_eye_location_z right_eye_location_z left_gaze_dir_x right_gaze_dir_x left_gaze_dir_y right_gaze_dir_y left_gaze_dir_z right_gaze_dir_z

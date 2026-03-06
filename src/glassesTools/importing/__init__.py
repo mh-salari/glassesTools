@@ -1,3 +1,5 @@
+"""Unified import interface for all supported eye tracker devices."""
+
 import os
 import pathlib
 
@@ -7,69 +9,73 @@ import polars as pl
 from .. import eyetracker, naming
 from ..eyetracker import EyeTracker
 from ..recording import Recording
-from .adhawk_mindlink import preprocessData as adhawk_mindlink
-from .argus_ETVision import preprocessData as argus_ETVision
-from .generic import importData as generic
-from .meta_aria_gen1 import importData as meta_aria_gen1
-from .SeeTrue_STONE import preprocessData as SeeTrue_STONE
-from .SMI_ETG import preprocessData as SMI_ETG
-from .tobii_G2 import preprocessData as tobii_G2
-from .tobii_G3 import preprocessData as tobii_G3
+from .adhawk_mindlink import preprocess_data as adhawk_mindlink
+from .argus_ETVision import preprocess_data as argus_ETVision
+from .generic import import_data as generic
+from .meta_aria_gen1 import import_data as meta_aria_gen1
+from .SeeTrue_STONE import preprocess_data as SeeTrue_STONE
+from .SMI_ETG import preprocess_data as SMI_ETG
+from .tobii_G2 import preprocess_data as tobii_G2
+from .tobii_G3 import preprocess_data as tobii_G3
 
 
 def pupil_core(
     output_dir: str | pathlib.Path,
-    source_dir: str | pathlib.Path = None,
-    rec_info: Recording = None,
-    copy_scene_video=True,
-    source_dir_as_relative_path=False,
+    source_dir: str | pathlib.Path | None = None,
+    rec_info: Recording | None = None,
+    copy_scene_video: bool = True,
+    source_dir_as_relative_path: bool = False,
 ) -> Recording:
-    from .pupilLabs import preprocessData
+    """Import and preprocess a Pupil Core recording."""
+    from .pupilLabs import preprocess_data
 
-    return preprocessData(
+    return preprocess_data(
         output_dir, EyeTracker.Pupil_Core, source_dir, rec_info, copy_scene_video, source_dir_as_relative_path
     )
 
 
 def pupil_invisible(
     output_dir: str | pathlib.Path,
-    source_dir: str | pathlib.Path = None,
-    rec_info: Recording = None,
-    copy_scene_video=True,
-    source_dir_as_relative_path=False,
+    source_dir: str | pathlib.Path | None = None,
+    rec_info: Recording | None = None,
+    copy_scene_video: bool = True,
+    source_dir_as_relative_path: bool = False,
 ) -> Recording:
-    from .pupilLabs import preprocessData
+    """Import and preprocess a Pupil Invisible recording."""
+    from .pupilLabs import preprocess_data
 
-    return preprocessData(
+    return preprocess_data(
         output_dir, EyeTracker.Pupil_Invisible, source_dir, rec_info, copy_scene_video, source_dir_as_relative_path
     )
 
 
 def pupil_neon(
     output_dir: str | pathlib.Path,
-    source_dir: str | pathlib.Path = None,
-    rec_info: Recording = None,
-    copy_scene_video=True,
-    source_dir_as_relative_path=False,
+    source_dir: str | pathlib.Path | None = None,
+    rec_info: Recording | None = None,
+    copy_scene_video: bool = True,
+    source_dir_as_relative_path: bool = False,
 ) -> Recording:
-    from .pupilLabs import preprocessData
+    """Import and preprocess a Pupil Neon recording."""
+    from .pupilLabs import preprocess_data
 
-    return preprocessData(
+    return preprocess_data(
         output_dir, EyeTracker.Pupil_Neon, source_dir, rec_info, copy_scene_video, source_dir_as_relative_path
     )
 
 
 def VPS_19(
     output_dir: str | pathlib.Path,
-    source_dir: str | pathlib.Path = None,
-    rec_info: Recording = None,
-    copy_scene_video=True,
-    source_dir_as_relative_path=False,
-    cam_cal_file: str | pathlib.Path = None,
+    source_dir: str | pathlib.Path | None = None,
+    rec_info: Recording | None = None,
+    copy_scene_video: bool = True,
+    source_dir_as_relative_path: bool = False,
+    cam_cal_file: str | pathlib.Path | None = None,
 ) -> Recording:
-    from .VPS import preprocessData
+    """Import and preprocess a Viewpointsystem VPS 19 recording."""
+    from .VPS import preprocess_data
 
-    return preprocessData(
+    return preprocess_data(
         output_dir,
         EyeTracker.VPS_19,
         source_dir,
@@ -82,15 +88,16 @@ def VPS_19(
 
 def VPS_Lite(
     output_dir: str | pathlib.Path,
-    source_dir: str | pathlib.Path = None,
-    rec_info: Recording = None,
-    copy_scene_video=True,
-    source_dir_as_relative_path=False,
-    cam_cal_file: str | pathlib.Path = None,
+    source_dir: str | pathlib.Path | None = None,
+    rec_info: Recording | None = None,
+    copy_scene_video: bool = True,
+    source_dir_as_relative_path: bool = False,
+    cam_cal_file: str | pathlib.Path | None = None,
 ) -> Recording:
-    from .VPS import preprocessData
+    """Import and preprocess a Viewpointsystem VPS Lite recording."""
+    from .VPS import preprocess_data
 
-    return preprocessData(
+    return preprocess_data(
         output_dir,
         EyeTracker.VPS_Lite,
         source_dir,
@@ -102,65 +109,66 @@ def VPS_Lite(
 
 
 def get_recording_info(
-    source_dir: str | pathlib.Path, device: str | EyeTracker, device_name: str = None
+    source_dir: str | pathlib.Path, device: str | EyeTracker, device_name: str | None = None
 ) -> list[Recording]:
+    """Retrieve recording info from source_dir for the specified device type."""
     source_dir = pathlib.Path(source_dir)
     device = eyetracker.string_to_enum(device)
 
     rec_info = None
     match device:
         case EyeTracker.AdHawk_MindLink:
-            from .adhawk_mindlink import getRecordingInfo
+            from .adhawk_mindlink import get_recording_info
 
-            rec_info = getRecordingInfo(source_dir)
+            rec_info = get_recording_info(source_dir)
         case EyeTracker.Argus_ETVision:
-            from .argus_ETVision import getRecordingInfo
+            from .argus_ETVision import get_recording_info
 
-            rec_info = getRecordingInfo(source_dir)
+            rec_info = get_recording_info(source_dir)
         case EyeTracker.Generic:
-            from .generic import getRecordingInfo
+            from .generic import get_recording_info
 
-            rec_info = getRecordingInfo(source_dir, device_name)
+            rec_info = get_recording_info(source_dir, device_name)
         case EyeTracker.Meta_Aria_Gen_1:
-            from .meta_aria_gen1 import getRecordingInfo
+            from .meta_aria_gen1 import get_recording_info
 
-            rec_info = getRecordingInfo(source_dir)
+            rec_info = get_recording_info(source_dir)
         case EyeTracker.Pupil_Core:
-            from .pupilLabs import getRecordingInfo
+            from .pupilLabs import get_recording_info
 
-            rec_info = getRecordingInfo(source_dir, device)
+            rec_info = get_recording_info(source_dir, device)
         case EyeTracker.Pupil_Invisible:
-            from .pupilLabs import getRecordingInfo
+            from .pupilLabs import get_recording_info
 
-            rec_info = getRecordingInfo(source_dir, device)
+            rec_info = get_recording_info(source_dir, device)
         case EyeTracker.Pupil_Neon:
-            from .pupilLabs import getRecordingInfo
+            from .pupilLabs import get_recording_info
 
-            rec_info = getRecordingInfo(source_dir, device)
+            rec_info = get_recording_info(source_dir, device)
         case EyeTracker.SeeTrue_STONE:
-            from .SeeTrue_STONE import getRecordingInfo
+            from .SeeTrue_STONE import get_recording_info
 
-            rec_info = getRecordingInfo(source_dir)
+            rec_info = get_recording_info(source_dir)
         case EyeTracker.SMI_ETG:
-            from .SMI_ETG import getRecordingInfo
+            from .SMI_ETG import get_recording_info
 
-            rec_info = getRecordingInfo(source_dir)
+            rec_info = get_recording_info(source_dir)
         case EyeTracker.Tobii_Glasses_2:
-            from .tobii_G2 import getRecordingInfo
+            from .tobii_G2 import get_recording_info
 
-            rec_info = getRecordingInfo(source_dir)
+            rec_info = get_recording_info(source_dir)
         case EyeTracker.Tobii_Glasses_3:
-            from .tobii_G3 import getRecordingInfo
+            from .tobii_G3 import get_recording_info
 
-            rec_info = getRecordingInfo(source_dir)
+            rec_info = get_recording_info(source_dir)
         case EyeTracker.VPS_19:
-            from .VPS import getRecordingInfo
+            from .VPS import get_recording_info
 
-            rec_info = getRecordingInfo(source_dir, device)
+            rec_info = get_recording_info(source_dir, device)
         case EyeTracker.VPS_Lite:
-            from .VPS import getRecordingInfo
+            from .VPS import get_recording_info
 
-            rec_info = getRecordingInfo(source_dir, device)
+            rec_info = get_recording_info(source_dir, device)
         case _:
             raise RuntimeError(f'Not implemented for "{device.value}", contact developer')
 
@@ -169,25 +177,26 @@ def get_recording_info(
     return rec_info
 
 
-# single front end to the various device import functions for convenience
 def do_import(
-    output_dir: str | pathlib.Path = None,
-    source_dir: str | pathlib.Path = None,
-    device: str | EyeTracker = None,
-    rec_info: Recording = None,
-    copy_scene_video=True,
-    source_dir_as_relative_path=False,
-    cam_cal_file: str | pathlib.Path = None,
-    device_name: str = None,
+    output_dir: str | pathlib.Path | None = None,
+    source_dir: str | pathlib.Path | None = None,
+    device: str | EyeTracker | None = None,
+    rec_info: Recording | None = None,
+    copy_scene_video: bool = True,
+    source_dir_as_relative_path: bool = False,
+    cam_cal_file: str | pathlib.Path | None = None,
+    device_name: str | None = None,
 ) -> Recording:
-    # output_dir is the working directory folder where the export of this recording will be placed
-    # should match rec_info.working_directory if both are provided (is checked below)
-    # NB: cam_cal_file input is only honored for AdHawk MindLink and SeeTrue STONE recordings
-    if rec_info is not None:
-        if isinstance(rec_info, list):
-            raise ValueError(
-                'You should provide a single Recording to this functions "rec_info" input argument, not a list of Recordings.'
-            )
+    """Single front end to the various device import functions for convenience.
+
+    output_dir is the working directory folder where the export of this recording will be placed.
+    Should match rec_info.working_directory if both are provided (is checked below).
+    cam_cal_file input is only honored for AdHawk MindLink and SeeTrue STONE recordings.
+    """
+    if rec_info is not None and isinstance(rec_info, list):
+        raise ValueError(
+            'You should provide a single Recording to this functions "rec_info" input argument, not a list of Recordings.'
+        )
     device, rec_info, device_name = check_device(device, rec_info, device_name)
     source_dir, rec_info = check_source_dir(source_dir, rec_info)
     output_dir, rec_info = check_output_dir(output_dir, rec_info)
@@ -312,6 +321,7 @@ def do_import(
 
 
 def check_source_dir(source_dir: str | pathlib.Path, rec_info: Recording) -> tuple[pathlib.Path, Recording]:
+    """Validate and resolve source_dir, cross-checking with rec_info if provided."""
     if source_dir is not None:
         source_dir = pathlib.Path(source_dir)
         if (
@@ -333,6 +343,7 @@ def check_source_dir(source_dir: str | pathlib.Path, rec_info: Recording) -> tup
 
 
 def check_output_dir(output_dir: str | pathlib.Path, rec_info: Recording) -> tuple[pathlib.Path, Recording]:
+    """Validate and resolve output_dir, ensuring it is empty if it exists."""
     if output_dir is not None:
         output_dir = pathlib.Path(output_dir)
         if (
@@ -363,8 +374,9 @@ def check_folders(
     source_dir: str | pathlib.Path,
     rec_info: Recording,
     device: EyeTracker,
-    device_name: str = None,
+    device_name: str | None = None,
 ) -> tuple[pathlib.Path, pathlib.Path, Recording, str]:
+    """Validate and resolve both source and output directories, plus device consistency."""
     if rec_info is not None and rec_info.eye_tracker:
         if rec_info.eye_tracker != device:
             raise ValueError(
@@ -382,7 +394,10 @@ def check_folders(
     return output_dir, source_dir, rec_info, device_name
 
 
-def check_device(device: str | EyeTracker, rec_info: Recording, device_name: str = None):
+def check_device(
+    device: str | EyeTracker, rec_info: Recording, device_name: str | None = None
+) -> tuple[EyeTracker, Recording, str | None]:
+    """Resolve and validate device type from device and/or rec_info."""
     if device is None and (rec_info is None or not rec_info.eye_tracker):
         raise RuntimeError(
             'Either the "device" or the eye_tracker field of the "rec_info" input argument should be set.'
@@ -423,11 +438,11 @@ def _store_data(
     gaze: pd.DataFrame | None,
     frame_ts: pd.DataFrame | None,
     rec_info: Recording,
-    gaze_fname=naming.gaze_data_fname,
-    frame_ts_fname=naming.frame_timestamps_fname,
-    rec_info_fname=Recording.default_json_file_name,
-    source_dir_as_relative_path=False,
-):
+    gaze_fname: str = naming.gaze_data_fname,
+    frame_ts_fname: str = naming.frame_timestamps_fname,
+    rec_info_fname: str = Recording.default_json_file_name,
+    source_dir_as_relative_path: bool = False,
+) -> None:
     # write the gaze data to a csv file (polars as that library saves to file waaay faster)
     if gaze is not None:
         pl.from_pandas(gaze, include_index=True).write_csv(
@@ -450,7 +465,7 @@ def _store_data(
         if gaze is not None:
             durations.append(gaze.index[-1] - gaze.index[0])
         if frame_ts is not None:
-            durations.append(frame_ts.timestamp.iat[-1])
+            durations.append(frame_ts.timestamp.iloc[-1])
         rec_info.duration = round(max(durations))
     rec_info.store_as_json(output_dir / rec_info_fname)
 
