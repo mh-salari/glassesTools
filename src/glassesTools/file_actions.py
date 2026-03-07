@@ -1,4 +1,8 @@
-"""File system directory listing, drive enumeration, and network share utilities."""
+"""File system directory listing, drive enumeration, and network share utilities.
+
+Provides cross-platform directory listing (sync and async) plus Windows-specific
+drive enumeration and SMB network share discovery via Win32 APIs.
+"""
 
 import asyncio
 import datetime
@@ -16,7 +20,23 @@ from . import platform
 
 @dataclass
 class DirEntry:
-    """Represents a directory entry with metadata like timestamps and MIME type."""
+    """Represents a directory entry with metadata.
+
+    Attributes:
+        name: Display name (may differ from the filesystem name, e.g. drive
+            labels on Windows).
+        is_dir: Whether the entry is a directory.
+        full_path: Absolute filesystem path.
+        ctime: Creation timestamp (converted to :class:`~datetime.datetime` in
+            :meth:`__post_init__`). May be ``None`` for drives or network shares.
+        mtime: Modification timestamp (same conversion as *ctime*).
+        size: Size in bytes. May be ``None`` for drives or network shares.
+        mime_type: MIME type string, or a pseudo-type like
+            ``"file_action/drive"`` for drives. May be ``None``.
+        extra: Additional metadata (e.g. ``"drive_name"``, ``"free_space"``,
+            ``"remote_path"``).
+
+    """
 
     name: str
     is_dir: bool
@@ -28,7 +48,7 @@ class DirEntry:
     extra: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Convert numeric timestamps to datetime objects."""
+        """Convert numeric timestamps to :class:`~datetime.datetime` objects."""
         if self.ctime is not None and not isinstance(self.ctime, datetime.datetime):
             self.ctime = datetime.datetime.fromtimestamp(self.ctime)
         if self.mtime is not None and not isinstance(self.mtime, datetime.datetime):
@@ -36,18 +56,20 @@ class DirEntry:
 
 
 if platform.os == platform.Os.Windows:
+    # --- Windows-only: ctypes bindings for drive, folder, and network share APIs ---
     import ctypes
 
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    _mpr = ctypes.WinDLL("mpr", use_last_error=True)
-    _netapi32 = ctypes.WinDLL("netapi32", use_last_error=True)
-    _shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    _mpr = ctypes.WinDLL("mpr", use_last_error=True)  # WNet* network functions
+    _netapi32 = ctypes.WinDLL("netapi32", use_last_error=True)  # NetShare* functions
+    _shell32 = ctypes.WinDLL("shell32", use_last_error=True)  # SHGetFolderPath
 
     ERROR_NO_MORE_ITEMS = 259
     ERROR_EXTENDED_ERROR = 1208
     ERROR_SESSION_CREDENTIAL_CONFLICT = 1219
 
     def _error_check_non0_is_error_ex(allowed: list[int], result: int, _func: Any, _args: Any) -> int:
+        """Ctypes errcheck: raise on non-zero result unless in *allowed*."""
         if not result or result in allowed:
             return result
         if result == ERROR_EXTENDED_ERROR:
@@ -63,9 +85,11 @@ if platform.os == platform.Os.Windows:
         raise ctypes.WinError(result)
 
     def _error_check_non0_is_error(result: int, _func: Any, _args: Any) -> int:
+        """Ctypes errcheck: raise on any non-zero result."""
         return _error_check_non0_is_error_ex([], result, _func, _args)
 
     def _error_check_0_is_error(result: int, _func: Any, _args: Any) -> int:
+        """Ctypes errcheck: raise when result is zero (Win32 BOOL failure)."""
         if not result:
             raise ctypes.WinError(ctypes.get_last_error())
         return result
@@ -324,10 +348,15 @@ if platform.os == platform.Os.Windows:
     NetApiBufferFree.restype = NET_API_STATUS
 
     def get_thispc_listing() -> list[DirEntry]:
-        """Return directory entries for Desktop, My Documents, and Downloads."""
+        """Return directory entries for well-known user folders.
+
+        Returns:
+            Entries for Desktop, My Documents, and Downloads (if it exists).
+
+        """
         items = []
-        # NB: we also check for Downloads folder (doesn't have a CSIDL), add if found
-        # expect it as a subfolder of user's profile folder
+        # Downloads has no dedicated CSIDL constant, so we derive it as a
+        # subdirectory of the user profile folder (CSIDL_PROFILE)
         for d, subdir, disp_name in [
             (CSIDL_DESKTOP, None, "Desktop"),
             (CSIDL_MYDOCUMENTS, None, "My Documents"),
@@ -354,8 +383,18 @@ if platform.os == platform.Os.Windows:
         return items
 
     def get_drives() -> list[DirEntry]:
-        """Enumerate logical drives with type, label, and size information."""
+        """Enumerate logical drives with type, label, and size information.
+
+        Skips unknown drives and drives without a root directory. Each entry's
+        :attr:`~DirEntry.extra` dict contains ``"drive_name"`` and
+        ``"free_space"``; network drives also have ``"remote_path"``.
+
+        Returns:
+            One :class:`DirEntry` per accessible drive.
+
+        """
         drives = []
+        # Each bit in the bitmask corresponds to a drive letter (bit 0 = A:, bit 1 = B:, etc.)
         bitmask = GetLogicalDrives()
         for letter in string.ascii_uppercase:
             if bitmask & 1:
@@ -382,6 +421,7 @@ if platform.os == platform.Os.Windows:
                         entry.name = f"{display_name} ({drive[0:-1]})"
                     case 4:  # DRIVE_REMOTE
                         entry.mime_type = "file_action/drive_network"
+                        # Resolve the mapped drive letter to its UNC path (e.g. Z: -> \\SERVER\share)
                         buffer_len = ctypes.wintypes.DWORD(1024)
                         buffer = ctypes.create_unicode_buffer(buffer_len.value)
                         un_buffer = ctypes.cast(buffer, LPUNIVERSAL_NAME_INFO)
@@ -407,12 +447,23 @@ if platform.os == platform.Os.Windows:
         return drives
 
     def get_visible_shares(server: str, user: str = "", password: str = "", domain: str = "") -> list[DirEntry]:
-        """List visible network shares on a server."""
+        """List visible network shares on a server via WNet enumeration.
+
+        Args:
+            server: Server name (with or without leading backslashes).
+            user: Username for authentication. If empty, assumes the user has
+                already authenticated (e.g. via Windows Explorer).
+            password: Password for *user*.
+            domain: Optional domain for *user*.
+
+        Returns:
+            One :class:`DirEntry` per visible share.
+
+        """
         shares: list[DirEntry] = []
 
-        # if no user provided, user should be able to connect from the Windows
-        # explorer to this server (e.g. user should have provided credentials)
-        # if you can open it in explorer, you can list it using this call)
+        # if no user provided, the user should already be authenticated to
+        # this server (e.g. via Windows Explorer credentials)
         if user:
             need_conn_cleanup = _server_login(server, user, password, domain)
         else:
@@ -455,12 +506,26 @@ if platform.os == platform.Os.Windows:
         return shares
 
     def get_all_shares(server: str, user: str = "", password: str = "", domain: str = "") -> list[DirEntry]:
-        """List all network shares on a server, including hidden ones."""
+        """List all network shares on a server, including hidden ones.
+
+        Uses ``NetShareEnum`` at level 1 to retrieve all shares, unlike
+        :func:`get_visible_shares` which only returns browsable shares.
+
+        Args:
+            server: Server name (with or without leading backslashes).
+            user: Username for authentication. If empty, assumes the user has
+                already authenticated.
+            password: Password for *user*.
+            domain: Optional domain for *user*.
+
+        Returns:
+            One :class:`DirEntry` per share (including admin/hidden shares).
+
+        """
         shares: list[DirEntry] = []
 
-        # if no user provided, user should be able to connect from the Windows
-        # explorer to this server (e.g. user should have provided credentials)
-        # if you can open it in explorer, you can list it using this call)
+        # if no user provided, the user should already be authenticated to
+        # this server (e.g. via Windows Explorer credentials)
         if user:
             need_conn_cleanup = _server_login(server, user, password, domain)
         else:
@@ -472,6 +537,7 @@ if platform.os == platform.Os.Windows:
         read, total = ctypes.wintypes.DWORD(0), ctypes.wintypes.DWORD(0)
         NetShareEnum(f"\\\\{server}", 1, ctypes.byref(buf), buf_len, ctypes.byref(read), ctypes.byref(total), None)
 
+        # Cast the raw buffer to a ctypes array of SHARE_INFO_1 structs
         UserInfoArray = SHARE_INFO_1 * read.value
         remote_shares = UserInfoArray.from_address(ctypes.addressof(buf.contents))
         for share in remote_shares:
@@ -495,10 +561,25 @@ if platform.os == platform.Os.Windows:
         return shares
 
     def check_share(server: str, share: str, user: str = "", password: str = "", domain: str = "") -> bool:
-        """Return True if the named share exists on the server."""
-        # if no user provided, user should be able to connect from the Windows
-        # explorer to this server (e.g. user should have provided credentials)
-        # if you can open it in explorer, you can list it using this call)
+        """Check whether a named share exists on the server.
+
+        Uses ``NetShareGetInfo`` rather than ``NetShareCheck`` (which
+        unreliably reports shares as non-existent).
+
+        Args:
+            server: Server name (with or without leading backslashes).
+            share: Share name to look up.
+            user: Username for authentication. If empty, assumes the user has
+                already authenticated.
+            password: Password for *user*.
+            domain: Optional domain for *user*.
+
+        Returns:
+            ``True`` if the share exists, ``False`` otherwise.
+
+        """
+        # if no user provided, the user should already be authenticated to
+        # this server (e.g. via Windows Explorer credentials)
         if user:
             need_conn_cleanup = _server_login(server, user, password, domain)
         else:
@@ -506,9 +587,8 @@ if platform.os == platform.Os.Windows:
 
         server = server.strip("\\/")
         buf = ctypes.wintypes.LPBYTE()
-        ret = NetShareGetInfo(
-            server, share, 0, buf
-        )  # NB: I never got NetShareCheck to work, always return that share doesn't exist, so using this slightly round-about way (we can't get info of a non-existent share)
+        # NetShareGetInfo returns NERR_NetNameNotFound for non-existent shares
+        ret = NetShareGetInfo(server, share, 0, buf)
         if ret == NERR_Success:
             NetApiBufferFree(buf)
 
@@ -518,8 +598,24 @@ if platform.os == platform.Os.Windows:
         return ret != NERR_NetNameNotFound
 
     def _server_login(server: str, user: str, password: str, domain: str = "") -> bool:
-        # check if we already have a connection with the server, and if so, if
-        # it is the expected user
+        """Establish a temporary WNet connection to *server* if needed.
+
+        Checks whether a connection with the expected *user* already exists.
+        If not, creates a temporary connection via ``WNetAddConnection2``.
+
+        Args:
+            server: Server name (with or without leading backslashes).
+            user: Username to authenticate as.
+            password: Password for *user*.
+            domain: Optional domain prefix for *user*.
+
+        Returns:
+            ``True`` if a new connection was made (caller should clean up
+            with :func:`_server_logout`), ``False`` if an existing
+            connection was reused.
+
+        """
+        # Check if a connection with the expected user already exists
         user_name = ctypes.create_unicode_buffer(1024)
         buf_size = ctypes.wintypes.DWORD(ctypes.sizeof(user_name))
         server = server.strip("\\/")
@@ -527,9 +623,11 @@ if platform.os == platform.Os.Windows:
         try:
             WNetGetUser(server, user_name, ctypes.byref(buf_size))
         except Exception:
+            # No existing connection to this server
             need_conn = True
         else:
             user_name = user_name.value
+            # endswith() handles domain-prefixed names (e.g. "DOMAIN\user" ends with "user")
             need_conn = user_name != user and not user_name.endswith(user)
         if need_conn:
             nr = NETRESOURCE(type=RESOURCETYPE_DISK, remote_name=server)
@@ -544,6 +642,7 @@ if platform.os == platform.Os.Windows:
         return need_conn
 
     def _server_logout(server: str) -> None:
+        """Cancel a temporary WNet connection to *server* (best-effort)."""
         server = server.strip("\\/")
         server = f"\\\\{server}"
         try:
@@ -553,25 +652,62 @@ if platform.os == platform.Os.Windows:
             pass
 
     def split_network_path(path: str | pathlib.Path) -> list[str]:
-        """Split a UNC network path into its components."""
+        r"""Split a UNC network path into its components.
+
+        Strips leading slashes, normalizes separators, and splits. For
+        example ``\\\\SERVER\\share\\dir`` becomes ``["SERVER", "share", "dir"]``.
+
+        Args:
+            path: UNC path string (must start with ``\\\\`` or ``//``).
+
+        Returns:
+            List of path components, or an empty list if *path* is not a
+            UNC path.
+
+        """
         path = str(path)
         if not path.startswith(("\\\\", "//")):
             return []
-        # this is a network address
-        # split into components
         path = path.strip("\\/").replace("\\", "/")
         return [s for s in str(path).split("/") if s]
 
     def get_net_computer(path: str | pathlib.Path) -> str | None:
-        """Return the server name if path is a bare network computer, else None."""
+        r"""Return the server name if *path* is a bare network computer path.
+
+        A bare network computer path has only one component after the leading
+        slashes (e.g. ``\\\\SERVER`` but not ``\\\\SERVER\\share``).
+
+        Args:
+            path: UNC path to check.
+
+        Returns:
+            The server name if *path* is a bare computer path, ``None``
+            otherwise.
+
+        """
         net_comp = split_network_path(path)
-        if len(net_comp) == 1:  # a single name entry, so thats just a computer
+        if len(net_comp) == 1:
             return net_comp[0]
         return None
 
 
 async def get_dir_list(path: pathlib.Path) -> list[DirEntry]:
-    """Asynchronously list directory entries with metadata."""
+    """Asynchronously list directory entries with metadata.
+
+    Entries that cannot be stat'd (e.g. broken symlinks, permission errors)
+    are silently skipped.
+
+    Args:
+        path: Directory to list.
+
+    Returns:
+        List of :class:`DirEntry` objects for accessible entries.
+
+    Raises:
+        FileNotFoundError: If *path* does not exist.
+        NotADirectoryError: If *path* is not a directory.
+
+    """
     path = aiopath.AsyncPath(path)
     out = []
     async for e in path.iterdir():
@@ -589,7 +725,22 @@ async def get_dir_list(path: pathlib.Path) -> list[DirEntry]:
 
 
 def get_dir_list_sync(path: pathlib.Path) -> list[DirEntry]:
-    """Synchronously list directory entries with metadata."""
+    """Synchronously list directory entries with metadata.
+
+    Entries that cannot be stat'd (e.g. broken symlinks, permission errors)
+    are silently skipped.
+
+    Args:
+        path: Directory to list.
+
+    Returns:
+        List of :class:`DirEntry` objects for accessible entries.
+
+    Raises:
+        FileNotFoundError: If *path* does not exist.
+        NotADirectoryError: If *path* is not a directory.
+
+    """
     path = pathlib.Path(path)
     out = []
     for e in path.iterdir():
@@ -613,14 +764,37 @@ def get_dir_list_sync(path: pathlib.Path) -> list[DirEntry]:
 
 
 async def make_dir(path: str | pathlib.Path, exist_ok: bool = False) -> None:
-    """Create a directory asynchronously after validating the path."""
+    """Create a directory asynchronously after validating the path.
+
+    Args:
+        path: Directory path to create. Validated with :mod:`pathvalidate`.
+        exist_ok: If ``True``, do not raise if the directory already exists.
+
+    Raises:
+        pathvalidate.ValidationError: If *path* contains invalid characters.
+        FileExistsError: If the directory exists and *exist_ok* is ``False``.
+
+    """
     pathvalidate.validate_filepath(path, "auto")
     path = aiopath.AsyncPath(path)
     await path.mkdir(exist_ok=exist_ok)
 
 
 async def rename_path(old_path: str | pathlib.Path, new_path: str | pathlib.Path) -> pathlib.Path:
-    """Rename a path asynchronously after validating both paths."""
+    """Rename a path asynchronously after validating both paths.
+
+    Args:
+        old_path: Current path. Validated with :mod:`pathvalidate`.
+        new_path: Desired new path. Validated with :mod:`pathvalidate`.
+
+    Returns:
+        The new path after renaming.
+
+    Raises:
+        pathvalidate.ValidationError: If either path contains invalid
+            characters.
+
+    """
     pathvalidate.validate_filepath(old_path, "auto")
     pathvalidate.validate_filepath(new_path, "auto")
     return await aiopath.AsyncPath(old_path).rename(new_path)
