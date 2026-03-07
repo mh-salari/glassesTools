@@ -22,7 +22,26 @@ def import_data(
     source_dir_as_relative_path: bool = False,
     cam_cal_file: str | pathlib.Path | None = None,
 ) -> Recording:
-    """Import data already in common format into a glassesTools recording."""
+    """Import data already in the common format into a glassesTools recording.
+
+    Unlike device-specific importers, this copies files that are already
+    in the expected layout (``gaze_data.tsv``, ``worldCamera.mp4``, and
+    optionally ``frame_timestamps.tsv`` and ``calibration.xml``). Missing
+    frame timestamps or frame indices are generated automatically.
+
+    Args:
+        output_dir: Working directory where the imported recording will be placed.
+        source_dir: Path to the source directory containing common-format files.
+        rec_info: Optional pre-populated recording metadata.
+        device_name: Custom device name for this Generic recording.
+        copy_scene_video: Whether to copy the scene video to output_dir.
+        source_dir_as_relative_path: Store source_dir as a relative path in rec_info.
+        cam_cal_file: Path to an external camera calibration file.
+
+    Returns:
+        The populated Recording object written to output_dir.
+
+    """
     from . import _store_data, check_folders
 
     output_dir, source_dir, rec_info, device_name = check_folders(
@@ -58,7 +77,7 @@ def import_data(
     else:
         frame_timestamps = None
 
-    # check gaze data hass a frame index column, and if not, make one
+    # check gaze data has a frame index column, and if not, make one
     gaze_data = pd.read_csv(output_dir / naming.gaze_data_fname, delimiter="\t")
     if "frame_idx" not in gaze_data.columns:
         print("    !! No frame index column found in gaze data, adding one based on timestamps...")
@@ -94,7 +113,21 @@ def import_data(
 
 
 def get_recording_info(input_dir: str | pathlib.Path, device_name: str | None = None) -> Recording | None:
-    """Return recording info for the given directory, or None if not a valid recording."""
+    """Return recording info for a generic recording directory.
+
+    If a recording info JSON exists, it is loaded and validated. Otherwise
+    a new Recording is created from the directory name. The directory must
+    contain ``worldCamera.mp4`` and ``gaze_data.tsv``.
+
+    Args:
+        input_dir: Path to the generic recording directory.
+        device_name: Expected device name to match against the recording.
+
+    Returns:
+        A Recording object, or None if the directory is not a valid recording
+        or doesn't match the expected device name.
+
+    """
     input_dir = pathlib.Path(input_dir)
 
     rec_info_fname = input_dir / Recording.default_json_file_name
@@ -123,13 +156,21 @@ def get_recording_info(input_dir: str | pathlib.Path, device_name: str | None = 
             )
             return None
 
-    # we got a valid recording
-    # return what we've got
     return rec_info
 
 
 def check_recording(input_dir: str | pathlib.Path, rec_info: Recording, device_name: str | None = None) -> None:
-    """Validate that rec_info matches the actual recording on disk."""
+    """Validate that rec_info matches the actual recording on disk.
+
+    Args:
+        input_dir: Path to the generic recording directory.
+        rec_info: Recording metadata to validate.
+        device_name: Expected device name.
+
+    Raises:
+        ValueError: If the recording name or device name doesn't match.
+
+    """
     actual_rec_info = get_recording_info(input_dir, device_name)
 
     if actual_rec_info is None or rec_info.name != actual_rec_info.name:
@@ -145,7 +186,26 @@ def check_recording(input_dir: str | pathlib.Path, rec_info: Recording, device_n
 def copy_generic_recording(
     input_dir: pathlib.Path, output_dir: pathlib.Path, copy_scene_video: bool, cam_cal_file: str | pathlib.Path | None
 ) -> tuple[pathlib.Path, pathlib.Path | None, bool, bool]:
-    """Copy gaze data, video, frame timestamps, and calibration files to output dir."""
+    """Copy gaze data, video, frame timestamps, and calibration files to output dir.
+
+    Copies all available common-format files from input_dir, using
+    cam_cal_file if provided, otherwise falling back to ``calibration.xml``
+    in the input directory.
+
+    Args:
+        input_dir: Source recording directory.
+        output_dir: Destination directory.
+        copy_scene_video: Whether to copy the scene video file.
+        cam_cal_file: Optional path to an external camera calibration file.
+
+    Returns:
+        A tuple of (source video path, destination video path or None,
+        whether frame timestamps were found, whether calibration was found).
+
+    Raises:
+        RuntimeError: If the gaze data or video file is not found.
+
+    """
     gaze_file = input_dir / "gaze_data.tsv"
     if not gaze_file.is_file():
         raise RuntimeError(f"The {gaze_file} file is not found in the input directory {input_dir}")

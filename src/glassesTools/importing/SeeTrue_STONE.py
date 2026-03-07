@@ -28,7 +28,30 @@ def preprocess_data(
     source_dir_as_relative_path: bool = False,
     cam_cal_file: str | pathlib.Path | None = None,
 ) -> Recording:
-    """Run all preprocessing steps on SeeTrue STONE data and store in output_dir."""
+    """Run all preprocessing steps on SeeTrue STONE data and store in output_dir.
+
+    SeeTrue recordings must be transcoded with ffmpeg (scene frames are
+    individual JPEGs that need to be assembled into a video).
+
+    Args:
+        output_dir: Working directory where the imported recording will be placed.
+        source_dir: Path to the raw recording. Falls back to ``rec_info.source_directory``.
+        rec_info: Optional pre-populated recording metadata. If not provided,
+            the first recording found in source_dir is used.
+        _copy_scene_video: Ignored; SeeTrue scene video is always transcoded.
+        source_dir_as_relative_path: Store source_dir as a relative path in rec_info.
+        cam_cal_file: Path to an external camera calibration file. If None,
+            hardcoded calibration values from SeeTrue are used.
+
+    Returns:
+        The populated Recording object written to output_dir.
+
+    Raises:
+        RuntimeError: If ffmpeg is not found on the system PATH, or if
+            source_dir contains no valid SeeTrue recordings.
+        ValueError: If rec_info specifies a recording not found in source_dir.
+
+    """
     from . import _store_data, check_folders
     # NB: _copy_scene_video input argument is ignored, SeeTrue recordings must be transcoded with ffmpeg to be useful
 
@@ -75,7 +98,18 @@ def preprocess_data(
 
 
 def get_recording_info(input_dir: str | pathlib.Path) -> list[Recording] | None:
-    """Return recording info for the given directory, or None if not a valid recording."""
+    """Return recording info for all SeeTrue STONE recordings in input_dir.
+
+    Recordings are identified by matching pairs of ``EyeData_*.csv`` files
+    and ``ScenePics_*`` directories sharing the same sequence number.
+
+    Args:
+        input_dir: Path to the SeeTrue recording directory.
+
+    Returns:
+        A list of Recording objects, or None if no valid recordings are found.
+
+    """
     input_dir = pathlib.Path(input_dir)
     rec_infos = []
 
@@ -105,7 +139,16 @@ def get_recording_info(input_dir: str | pathlib.Path) -> list[Recording] | None:
 
 
 def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> bool:
-    """Check that the folder contains the required EyeData and ScenePics files."""
+    """Check that the folder contains the required EyeData CSV and ScenePics directory.
+
+    Args:
+        input_dir: Path to the SeeTrue recording directory.
+        rec_info: Recording metadata identifying which recording to check.
+
+    Returns:
+        True if both the gaze data CSV and scene frames directory exist.
+
+    """
     # check we have an exported gaze data file
     file = f"EyeData_{rec_info.name}.csv"
     if not (input_dir / file).is_file():
@@ -119,7 +162,24 @@ def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> bool:
 def copy_see_true_recording(
     input_dir: pathlib.Path, output_dir: pathlib.Path, rec_info: Recording
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Copy the relevant files from the specified input dir to the specified output dirs."""
+    """Assemble scene video from JPEG frames and process gaze data.
+
+    Reads individual scene frames, fills gaps with black frames, assembles
+    them into an MP4 video using PyAV with correct per-frame timing, and
+    aligns gaze timestamps so that the first frame starts at time zero.
+
+    Args:
+        input_dir: Source recording directory containing ScenePics and EyeData.
+        output_dir: Destination directory for the assembled video.
+        rec_info: Recording metadata (updated with the scene video filename).
+
+    Returns:
+        A tuple of (gaze DataFrame indexed by timestamp, frame timestamps DataFrame).
+
+    Raises:
+        RuntimeError: If the scene video could not be created.
+
+    """
     # get scene video dimensions by interrogating a frame in scene_vid_dir
     scene_vid_dir = input_dir / ("ScenePics_" + rec_info.name)
     frame = next(scene_vid_dir.glob("*.jpeg"))
@@ -259,9 +319,13 @@ def copy_see_true_recording(
 
 
 def get_camera_hardcoded(output_dir: str | pathlib.Path) -> None:
-    """Get camera calibration.
+    """Write hardcoded camera calibration to an OpenCV XML file.
 
-    Hardcoded as per info received from SeeTrue.
+    Uses calibration values provided by SeeTrue (640x480, f=495).
+
+    Args:
+        output_dir: Directory where the calibration XML file is written.
+
     """
     # turn into camera matrix and distortion coefficients as used by OpenCV
     camera = {}
@@ -279,28 +343,43 @@ def get_camera_hardcoded(output_dir: str | pathlib.Path) -> None:
 def format_gaze_data(
     input_file: str | pathlib.Path, scene_video_dimensions: list[int]
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load gazedata file.
+    """Load and process the SeeTrue gaze data CSV file.
 
-    Format to get the gaze coordinates w.r.t. world camera, and timestamps for
-    every frame of video.
+    Parses the semicolon-delimited gaze data, converts normalized gaze
+    coordinates to pixel coordinates, and extracts per-frame timestamps.
+
+    Args:
+        input_file: Path to the ``EyeData_*.csv`` file.
+        scene_video_dimensions: Scene camera resolution ``[width, height]``.
 
     Returns:
-        - formatted dataframe with cols for timestamp, frame_idx, and gaze data
-        - np array of frame timestamps
+        A tuple of (gaze DataFrame indexed by timestamp, frame timestamps DataFrame).
 
     """
-    # convert the json file to pandas dataframe
     df = gazedata2df(input_file, scene_video_dimensions)
 
     # get time stamps for scene picture numbers
     frame_timestamps = pd.DataFrame(df["frame_idx"])
 
-    # return the gaze data df and frame time stamps array
     return df, frame_timestamps
 
 
 def gazedata2df(text_file: str | pathlib.Path, scene_video_dimensions: list[int]) -> pd.DataFrame:
-    """Convert the gazedata file to a pandas dataframe."""
+    """Parse a SeeTrue EyeData CSV file into a pandas DataFrame.
+
+    Reads the semicolon-delimited file, renames columns to the common naming
+    scheme, converts pupil area (sq mm) to diameter (mm), and scales
+    normalized gaze coordinates to pixel values.
+
+    Args:
+        text_file: Path to the ``EyeData_*.csv`` file.
+        scene_video_dimensions: Scene camera resolution ``[width, height]``
+            for converting normalized gaze coordinates to pixels.
+
+    Returns:
+        A DataFrame indexed by timestamp with gaze data columns.
+
+    """
     df = pd.read_table(text_file, sep=";", index_col=False)
     df.columns = df.columns.str.strip()
 
@@ -329,5 +408,4 @@ def gazedata2df(text_file: str | pathlib.Path, scene_video_dimensions: list[int]
     df["gaze_pos_vid_x"] *= scene_video_dimensions[0]
     df["gaze_pos_vid_y"] *= scene_video_dimensions[1]
 
-    # return the dataframe
     return df

@@ -33,7 +33,24 @@ def preprocess_data(
     copy_scene_video: bool = True,
     source_dir_as_relative_path: bool = False,
 ) -> Recording:
-    """Run all preprocessing steps on SMI ETG data and store in output_dir."""
+    """Run all preprocessing steps on SMI ETG data and store in output_dir.
+
+    Args:
+        output_dir: Working directory where the imported recording will be placed.
+        source_dir: Path to the raw recording. Falls back to ``rec_info.source_directory``.
+        rec_info: Optional pre-populated recording metadata. If not provided,
+            the first recording found in source_dir is used.
+        copy_scene_video: Whether to copy the scene video to output_dir.
+        source_dir_as_relative_path: Store source_dir as a relative path in rec_info.
+
+    Returns:
+        The populated Recording object written to output_dir.
+
+    Raises:
+        ValueError: If rec_info specifies a recording not found in source_dir.
+        RuntimeError: If source_dir contains no valid SMI ETG recordings.
+
+    """
     from . import _store_data, check_folders
 
     # NB: copy_scene_video input argument might be ignored. If ffmpeg is present, it will be used to transcode the scene camera video
@@ -79,7 +96,18 @@ def preprocess_data(
 
 
 def get_recording_info(input_dir: str | pathlib.Path) -> list[Recording] | None:
-    """Return recording info for the given directory, or None if not a valid recording."""
+    """Return recording info for all SMI ETG recordings in input_dir.
+
+    A valid SMI ETG folder must contain ``codec1.bin`` and one or more
+    ``*-export.avi`` files (BeGaze scene video exports).
+
+    Args:
+        input_dir: Path to the SMI recording directory.
+
+    Returns:
+        A list of Recording objects, or None if no valid recordings are found.
+
+    """
     input_dir = pathlib.Path(input_dir)
 
     # NB: can be multiple recordings in an SMI folder
@@ -105,8 +133,25 @@ def get_recording_info(input_dir: str | pathlib.Path) -> list[Recording] | None:
     return rec_infos or None
 
 
-def check_recording(input_dir: str | pathlib.Path, rec_info: str | pathlib.Path, use_return: bool = False) -> bool:
-    """Check that the folder contains the required BeGaze exports."""
+def check_recording(input_dir: str | pathlib.Path, rec_info: Recording, use_return: bool = False) -> bool:
+    """Check that the folder contains the required BeGaze exports for a recording.
+
+    Verifies that both the exported scene video (``*-export.avi``) and the
+    exported gaze data (``*-recording.txt``) exist in input_dir.
+
+    Args:
+        input_dir: Path to the SMI recording directory.
+        rec_info: Recording metadata identifying which recording to check.
+        use_return: If True, return False on missing files instead of raising.
+
+    Returns:
+        True if all required files exist, False if use_return is True and
+        files are missing.
+
+    Raises:
+        RuntimeError: If a required file is missing and use_return is False.
+
+    """
     # check we have an exported gaze data file
     file = rec_info.name + "-export.avi"
     if not (input_dir / file).is_file():
@@ -131,8 +176,16 @@ def check_recording(input_dir: str | pathlib.Path, rec_info: str | pathlib.Path,
 def copy_smi_recordings(
     input_dir: pathlib.Path, output_dir: pathlib.Path, rec_info: Recording, copy_scene_video: bool
 ) -> None:
-    """Copy the relevant files from the specified input dir to the specified output dirs."""
-    # Copy relevant files to new directory
+    """Copy the scene video from input_dir to output_dir.
+
+    Args:
+        input_dir: Source recording directory.
+        output_dir: Destination directory.
+        rec_info: Recording metadata (updated with the scene video filename).
+        copy_scene_video: If True, copy the video file; otherwise just record
+            the source filename in rec_info.
+
+    """
     src_file = input_dir / f"{rec_info.name}-export.avi"
 
     if copy_scene_video:
@@ -148,7 +201,19 @@ def copy_smi_recordings(
 
 
 def read_smi_cam_info_file(input_dir: str | pathlib.Path) -> configparser.ConfigParser:
-    """Read and parse the SMI codec1.bin camera info file."""
+    """Read and parse the SMI codec1.bin camera info file.
+
+    The codec1.bin file uses an INI-like format with ``##`` comment prefixes
+    that must be stripped before parsing.
+
+    Args:
+        input_dir: Path to the SMI recording directory.
+
+    Returns:
+        A ConfigParser with an additional ``getnparray`` converter for
+        reading tab-separated numpy arrays.
+
+    """
     cam_info_str = pathlib.Path(input_dir / "codec1.bin").read_text(encoding="utf-8").replace("## ", "")
 
     cam_info = configparser.ConfigParser(converters={"nparray": lambda x: np.fromstring(x, sep="\t")})
@@ -157,7 +222,19 @@ def read_smi_cam_info_file(input_dir: str | pathlib.Path) -> configparser.Config
 
 
 def get_camera_from_file(input_dir: str | pathlib.Path, output_dir: str | pathlib.Path) -> np.ndarray:
-    """Read camera calibration from information file."""
+    """Read camera calibration from codec1.bin and write an OpenCV calibration XML.
+
+    Converts SMI's FOV, sensor offsets, distortion, and extrinsic parameters
+    into an OpenCV-compatible camera matrix and distortion coefficients.
+
+    Args:
+        input_dir: Path to the SMI recording directory containing codec1.bin.
+        output_dir: Directory where the calibration XML file is written.
+
+    Returns:
+        The scene camera resolution as a 2-element array ``[width, height]``.
+
+    """
     cam_info = read_smi_cam_info_file(input_dir)
 
     camera = {}
@@ -217,14 +294,19 @@ def get_camera_from_file(input_dir: str | pathlib.Path, output_dir: str | pathli
 def format_gaze_data(
     input_dir: str | pathlib.Path, rec_info: Recording, scene_video_dimensions: list[int]
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load gazedata file.
+    """Load and process the SMI gaze data export file.
 
-    Format to get the gaze coordinates w.r.t. world camera, and timestamps for
-    every frame of video.
+    Parses the tab-delimited gaze export, converts SMI's HH:MM:SS:FR
+    timecodes into sequential frame indices, and extracts frame timestamps
+    from the scene video.
+
+    Args:
+        input_dir: Path to the SMI recording directory.
+        rec_info: Recording metadata identifying which recording to process.
+        scene_video_dimensions: Scene camera resolution ``[width, height]``.
 
     Returns:
-        - formatted dataframe with cols for timestamp, frame_idx, and gaze data
-        - np array of frame timestamps
+        A tuple of (gaze DataFrame indexed by timestamp, frame timestamps DataFrame).
 
     """
     # convert the text file to pandas dataframe
@@ -254,12 +336,24 @@ def format_gaze_data(
     # seems to line up with the SMI export (most of the time, sadly seems to vary a little between videos)
     df.frame_idx -= df.frame_idx.min()
 
-    # return the gaze data df and frame time stamps array
     return df, frame_timestamps
 
 
 def gazedata2df(text_file: str | pathlib.Path, _scene_video_dimensions: list[int]) -> pd.DataFrame:
-    """Convert the gazedata file to a pandas dataframe."""
+    """Parse an SMI BeGaze gaze export text file into a pandas DataFrame.
+
+    Reads the tab-delimited file, drops redundant monocular columns when
+    they duplicate the binocular data, renames columns to the common
+    naming scheme, and converts timestamps from microseconds to milliseconds.
+
+    Args:
+        text_file: Path to the ``*-recording.txt`` gaze data file.
+        _scene_video_dimensions: Unused; kept for interface consistency.
+
+    Returns:
+        A DataFrame indexed by timestamp (ms) with gaze data columns.
+
+    """
     text_data = pathlib.Path(text_file).read_text(encoding="utf-8")
 
     df = pd.read_table(StringIO(text_data), comment="#", index_col=False)
@@ -324,5 +418,4 @@ def gazedata2df(text_file: str | pathlib.Path, _scene_video_dimensions: list[int
     df["timestamp"] -= df["timestamp"].iloc[0]
     df = df.set_index("timestamp")
 
-    # return the dataframe
     return df

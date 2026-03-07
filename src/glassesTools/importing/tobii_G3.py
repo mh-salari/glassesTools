@@ -33,7 +33,23 @@ def preprocess_data(
     copy_scene_video: bool = True,
     source_dir_as_relative_path: bool = False,
 ) -> Recording:
-    """Run all preprocessing steps on Tobii Glasses 3 data and store in output_dir."""
+    """Run all preprocessing steps on Tobii Glasses 3 data and store in output_dir.
+
+    Copies the scene video and gaze data, reads camera calibration from
+    ``recording.g3``, and formats gaze data from the decompressed
+    ``gazedata`` JSON file.
+
+    Args:
+        output_dir: Working directory where the imported recording will be placed.
+        source_dir: Path to the raw recording. Falls back to ``rec_info.source_directory``.
+        rec_info: Optional pre-populated recording metadata.
+        copy_scene_video: Whether to copy the scene video to output_dir.
+        source_dir_as_relative_path: Store source_dir as a relative path in rec_info.
+
+    Returns:
+        The populated Recording object written to output_dir.
+
+    """
     from . import _store_data, check_folders
 
     output_dir, source_dir, rec_info, _ = check_folders(output_dir, source_dir, rec_info, EyeTracker.Tobii_Glasses_3)
@@ -76,7 +92,19 @@ def preprocess_data(
 
 
 def get_recording_info(input_dir: str | pathlib.Path) -> Recording | None:
-    """Return recording info for the given directory, or None if not a valid recording."""
+    """Return recording info for a Tobii Glasses 3 recording directory.
+
+    Reads ``recording.g3`` for name, duration, and start time, the
+    ``participant`` file for participant name, and system info files
+    (``RuVersion``, ``HuSerial``, ``RuSerial``) from the meta-folder.
+
+    Args:
+        input_dir: Path to the Tobii Glasses 3 recording directory.
+
+    Returns:
+        A Recording object, or None if ``recording.g3`` is missing.
+
+    """
     input_dir = pathlib.Path(input_dir)
     rec_info = Recording(source_directory=input_dir, eye_tracker=EyeTracker.Tobii_Glasses_3)
 
@@ -106,13 +134,23 @@ def get_recording_info(input_dir: str | pathlib.Path) -> Recording | None:
     rec_info.glasses_serial = (input_dir / r_info["meta-folder"] / "HuSerial").read_text()
     rec_info.recording_unit_serial = (input_dir / r_info["meta-folder"] / "RuSerial").read_text()
 
-    # we got a valid recording and at least some info if we got here
-    # return what we've got
     return rec_info
 
 
 def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> None:
-    """Validate that rec_info matches the actual recording on disk."""
+    """Validate that rec_info matches the actual recording on disk.
+
+    Re-reads recording info and compares participant, duration, start time,
+    firmware version, and serial numbers.
+
+    Args:
+        input_dir: Path to the Tobii Glasses 3 recording directory.
+        rec_info: Recording metadata to validate.
+
+    Raises:
+        ValueError: If any field in rec_info doesn't match the actual recording.
+
+    """
     actual_rec_info = get_recording_info(input_dir)
     if actual_rec_info is None or rec_info.name != actual_rec_info.name:
         raise ValueError(f'A recording with the name "{rec_info.name}" was not found in the folder {input_dir}.')
@@ -147,8 +185,21 @@ def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> None:
 def copy_tobii_recording(
     input_dir: pathlib.Path, output_dir: pathlib.Path, copy_scene_video: bool
 ) -> tuple[pathlib.Path, pathlib.Path | None]:
-    """Copy the relevant files from the specified input dir to the specified output dir."""
-    # Copy relevent files to new directory
+    """Copy scene video and decompress gaze data to output dir.
+
+    Copies ``scenevideo.mp4`` and decompresses ``gazedata.gz`` into the
+    output directory.
+
+    Args:
+        input_dir: Source recording directory.
+        output_dir: Destination directory.
+        copy_scene_video: If True, copy the video file; otherwise just
+            return the source path.
+
+    Returns:
+        A tuple of (source video path, destination video path or None).
+
+    """
     src_file = input_dir / "scenevideo.mp4"
     if copy_scene_video:
         dest_file = output_dir / f"{naming.scene_camera_video_fname_stem}.mp4"
@@ -168,7 +219,20 @@ def copy_tobii_recording(
 
 
 def get_camera_from_json(input_dir: str | pathlib.Path, output_dir: str | pathlib.Path) -> np.ndarray:
-    """Read camera calibration from recording information file."""
+    """Read camera calibration from the ``recording.g3`` JSON file.
+
+    Extracts scene camera intrinsics (focal length, principal point,
+    distortion coefficients, position, rotation), builds an OpenCV-style
+    camera matrix, and writes the calibration XML.
+
+    Args:
+        input_dir: Source recording directory containing ``recording.g3``.
+        output_dir: Destination directory for the calibration XML.
+
+    Returns:
+        The scene camera resolution as a numpy array ``[width, height]``.
+
+    """
     with pathlib.Path(input_dir / "recording.g3").open("rb") as f:
         r_info = json.load(f)
 
@@ -209,13 +273,19 @@ def get_camera_from_json(input_dir: str | pathlib.Path, output_dir: str | pathli
 def format_gaze_data(
     input_dir: str | pathlib.Path, scene_video_dimensions: list[int], rec_info: Recording
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load gazedata json file.
+    """Load and process Tobii Glasses 3 gaze data from the gazedata file.
 
-    Format to get the gaze coordinates w/r/t world camera, and timestamps for every frame of video.
+    Parses the JSON gaze data, extracts frame timestamps from the scene
+    video, and assigns frame indices to each gaze sample.
+
+    Args:
+        input_dir: Directory containing the decompressed ``gazedata`` file.
+        scene_video_dimensions: Scene camera resolution ``[width, height]``.
+        rec_info: Recording metadata for locating the scene video.
 
     Returns:
-        - formatted dataframe with cols for timestamp, frame_idx, and gaze data
-        - np array of frame timestamps
+        A tuple of (gaze DataFrame indexed by timestamp, frame timestamps
+        DataFrame).
 
     """
     # convert the json file to pandas dataframe
@@ -228,12 +298,26 @@ def format_gaze_data(
     frame_idx = video_utils.timestamps_to_frame_number(df.index, frame_timestamps["timestamp"].to_numpy())
     df.insert(0, "frame_idx", frame_idx["frame_idx"])
 
-    # return the gaze data df and frame time stamps array
     return df, frame_timestamps
 
 
 def json2df(json_file: str | pathlib.Path, scene_video_dimensions: list[int]) -> pd.DataFrame:
-    """Convert the livedata.json file to a pandas dataframe"""
+    """Parse Tobii Glasses 3 gazedata JSON into a pandas DataFrame.
+
+    Each line in the file is a JSON object. Non-gaze entries are dropped.
+    Gaze origin, direction, pupil diameter, 2D and 3D gaze positions are
+    extracted per eye. Timestamps are converted from seconds to
+    milliseconds. The gazedata file is deleted after parsing.
+
+    Args:
+        json_file: Path to the decompressed ``gazedata`` file.
+        scene_video_dimensions: Scene camera resolution ``[width, height]``
+            for converting normalized gaze coordinates to pixels.
+
+    Returns:
+        A DataFrame indexed by timestamp (ms) with gaze data columns.
+
+    """
     entries = json.loads("[" + pathlib.Path(json_file).read_text(encoding="utf-8").replace("\n", ",")[:-1] + "]")
 
     # json no longer needed, remove
@@ -275,5 +359,4 @@ def json2df(json_file: str | pathlib.Path, scene_video_dimensions: list[int]) ->
     df.loc[:, "gaze_pos_vid_x"] *= scene_video_dimensions[0]
     df.loc[:, "gaze_pos_vid_y"] *= scene_video_dimensions[1]
 
-    # return the dataframe
     return df

@@ -34,13 +34,33 @@ def preprocess_data(
     copy_scene_video: bool = True,
     source_dir_as_relative_path: bool = False,
 ) -> Recording:
-    """Run all preprocessing steps on Pupil Labs data and store in output_dir."""
+    """Run all preprocessing steps on Pupil Labs data and store in output_dir.
+
+    Handles Pupil Core, Pupil Invisible, and Pupil Neon recordings, as well
+    as Pupil Cloud exports. Determines the export type, copies the scene
+    video, extracts camera calibration, and formats gaze data.
+
+    Args:
+        output_dir: Working directory where the imported recording will be placed.
+        device: Eye tracker device type (Pupil Core, Invisible, or Neon).
+        source_dir: Path to the raw recording. Falls back to ``rec_info.source_directory``.
+        rec_info: Optional pre-populated recording metadata.
+        copy_scene_video: Whether to copy the scene video to output_dir.
+        source_dir_as_relative_path: Store source_dir as a relative path in rec_info.
+
+    Returns:
+        The populated Recording object written to output_dir.
+
+    Raises:
+        ValueError: If the device is not a supported Pupil Labs eye tracker.
+
+    """
     from . import _store_data, check_device, check_folders
 
     device, rec_info, _ = check_device(device, rec_info)
     if device not in {EyeTracker.Pupil_Core, EyeTracker.Pupil_Invisible, EyeTracker.Pupil_Neon}:
         raise ValueError(
-            f"Provided device ({rec_info.eye_tracker.value}) is not a {EyeTracker.Pupil_Core.value}, a {EyeTracker.Pupil_Invisible.value} or a {EyeTracker.Pupil_Neon.value}."
+            f"Provided device ({device.value}) is not a {EyeTracker.Pupil_Core.value}, a {EyeTracker.Pupil_Invisible.value} or a {EyeTracker.Pupil_Neon.value}."
         )
     output_dir, source_dir, rec_info, _ = check_folders(output_dir, source_dir, rec_info, device)
     print(f"processing: {source_dir.name} -> {output_dir}")
@@ -110,11 +130,21 @@ def preprocess_data(
 
 
 def check_pupil_recording(input_dir: str | pathlib.Path) -> tuple[pathlib.Path, bool]:
-    """Check that the folder is properly prepared.
+    """Verify the recording folder has been exported and locate the gaze data file.
 
-    I.e., either:
-    - opened in pupil player and an export was run (currently Pupil Core or Pupil Invisible) or in neon player and export was run (Pupil Neon)
-    - exported from Pupil Cloud (currently Pupil Invisible or Pupil Neon)
+    Checks for either a Pupil/Neon Player export (``info.player.json`` +
+    ``exports/`` folder with ``gaze_positions*.csv``) or a Pupil Cloud
+    export (``info.json`` + ``gaze.csv``).
+
+    Args:
+        input_dir: Path to the recording directory.
+
+    Returns:
+        A tuple of (path to the gaze data file, whether this is a Cloud export).
+
+    Raises:
+        RuntimeError: If the folder has no valid export.
+
     """
     # check we have an info.player.json file
     if not (input_dir / "info.player.json").is_file():
@@ -143,7 +173,21 @@ def check_pupil_recording(input_dir: str | pathlib.Path) -> tuple[pathlib.Path, 
 
 
 def get_recording_info(input_dir: str | pathlib.Path, device: EyeTracker) -> Recording | None:
-    """Return recording info for the given directory, or None if not a valid recording."""
+    """Return recording info for the given directory, or None if not valid.
+
+    Reads device-specific JSON files to extract recording name, duration,
+    start time, serial numbers, and participant info. Supports both
+    Pupil/Neon Player exports and Pupil Cloud exports.
+
+    Args:
+        input_dir: Path to the recording directory.
+        device: Expected eye tracker device type.
+
+    Returns:
+        A Recording object, or None if the directory doesn't contain a
+        valid recording for the specified device.
+
+    """
     input_dir = pathlib.Path(input_dir)
     rec_info = Recording(source_directory=input_dir, eye_tracker=device)
 
@@ -268,13 +312,23 @@ def get_recording_info(input_dir: str | pathlib.Path, device: EyeTracker) -> Rec
             rec_info.firmware_version = i_info["pipeline_version"]
         rec_info.participant = i_info["wearer_name"]
 
-    # we got a valid recording and at least some info if we got here
-    # return what we've got
     return rec_info
 
 
 def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> None:
-    """Validate that rec_info matches the actual recording on disk."""
+    """Validate that rec_info matches the actual recording on disk.
+
+    Re-reads recording info from the directory and compares name, duration,
+    start time, software version, and device-specific serial numbers.
+
+    Args:
+        input_dir: Path to the recording directory.
+        rec_info: Recording metadata to validate.
+
+    Raises:
+        ValueError: If any field in rec_info doesn't match the actual recording.
+
+    """
     actual_rec_info = get_recording_info(input_dir, rec_info.eye_tracker)
     if actual_rec_info is None or rec_info.name != actual_rec_info.name:
         raise ValueError(f'A recording with the name "{rec_info.name}" was not found in the folder {input_dir}.')
@@ -290,7 +344,7 @@ def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> None:
         )
     if rec_info.recording_software_version != actual_rec_info.recording_software_version:
         raise ValueError(
-            f'A recording with the duration "{rec_info.duration}" was not found in the folder {input_dir}.'
+            f'A recording with the recording_software_version "{rec_info.recording_software_version}" was not found in the folder {input_dir}.'
         )
 
     # for invisible and neon recordings we have a bit more info
@@ -319,7 +373,19 @@ def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> None:
 
 
 def get_camera_from_msg_pack(input_dir: str | pathlib.Path, output_dir: str | pathlib.Path) -> list[int]:
-    """Read camera calibration from recording information file"""
+    """Read Pupil Core camera calibration from a msgpack intrinsics file.
+
+    Reads ``world.intrinsics``, renames fields to OpenCV conventions,
+    and writes the result as an XML calibration file.
+
+    Args:
+        input_dir: Source recording directory containing ``world.intrinsics``.
+        output_dir: Destination directory for the calibration XML.
+
+    Returns:
+        The scene camera resolution as a numpy array ``[width, height]``.
+
+    """
     cam_info = get_cam_info(input_dir / "world.intrinsics")
 
     # rename some fields, ensure they are numpy arrays
@@ -336,7 +402,21 @@ def get_camera_from_msg_pack(input_dir: str | pathlib.Path, output_dir: str | pa
 def get_camera_cal_from_bin_file(
     input_dir: str | pathlib.Path, output_dir: str | pathlib.Path, rec_info: Recording
 ) -> list[int]:
-    """Read camera calibration from binary calibration file provided by Pupil Labs."""
+    """Read camera calibration from the binary ``calibration.bin`` file.
+
+    The binary format differs between Pupil Invisible (3x3 extrinsics)
+    and Pupil Neon (4x4 extrinsics with additional eye camera data).
+
+    Args:
+        input_dir: Source recording directory containing ``calibration.bin``.
+        output_dir: Destination directory for the calibration XML.
+        rec_info: Recording metadata (used to determine device type and
+            scene video path for resolution lookup).
+
+    Returns:
+        The scene camera resolution as a numpy array ``[width, height]``.
+
+    """
     if rec_info.eye_tracker == EyeTracker.Pupil_Invisible:
         cal = np.fromfile(
             input_dir / "calibration.bin",
@@ -386,7 +466,24 @@ def get_camera_cal_from_bin_file(
 def get_camera_cal_from_online(
     input_dir: str | pathlib.Path, output_dir: str | pathlib.Path, rec_info: Recording
 ) -> list[int]:
-    """Get camera calibration from pupil labs"""
+    """Download camera calibration from the Pupil Labs cloud API.
+
+    Uses the device serial number to fetch calibration data from
+    ``api.cloud.pupil-labs.com``. Falls back to this when no local
+    ``calibration.bin`` is available.
+
+    Args:
+        input_dir: Source recording directory (for resolution lookup).
+        output_dir: Destination directory for the calibration XML.
+        rec_info: Recording metadata (provides serial number and device type).
+
+    Returns:
+        The scene camera resolution as a numpy array ``[width, height]``.
+
+    Raises:
+        RuntimeError: If the API request fails.
+
+    """
     if rec_info.eye_tracker == EyeTracker.Pupil_Invisible:
         serial = rec_info.scene_camera_serial
     elif rec_info.eye_tracker == EyeTracker.Pupil_Neon:
@@ -416,7 +513,21 @@ def get_camera_cal_from_online(
 def get_camera_cal_from_cloud_export(
     input_dir: str | pathlib.Path, output_dir: str | pathlib.Path, rec_info: Recording
 ) -> list[int] | None:
-    """Read camera calibration from Pupil Cloud export scene_camera.json."""
+    """Read camera calibration from a Pupil Cloud export's ``scene_camera.json``.
+
+    Handles both ``dist_coefs`` and ``distortion_coefficients`` key names
+    for backward compatibility with different Cloud export versions.
+
+    Args:
+        input_dir: Source recording directory containing ``scene_camera.json``.
+        output_dir: Destination directory for the calibration XML.
+        rec_info: Recording metadata (for scene video resolution lookup).
+
+    Returns:
+        The scene camera resolution as a numpy array, or None if
+        ``scene_camera.json`` is not found.
+
+    """
     file = input_dir / "scene_camera.json"
     if not file.is_file():
         return None
@@ -439,7 +550,14 @@ def get_camera_cal_from_cloud_export(
 
 
 def store_camera_calibration(cam_info: dict[str, typing.Any], output_dir: str | pathlib.Path) -> None:
-    """Write camera calibration dict to an OpenCV FileStorage XML file."""
+    """Write camera calibration dict to an OpenCV FileStorage XML file.
+
+    Args:
+        cam_info: Dictionary of calibration parameters (e.g., ``cameraMatrix``,
+            ``distCoeff``, ``resolution``).
+        output_dir: Directory where the calibration XML file is written.
+
+    """
     fs = cv2.FileStorage(output_dir / naming.scene_camera_calibration_fname, cv2.FILE_STORAGE_WRITE)
     for key, value in cam_info.items():
         fs.write(name=key, val=value)
@@ -447,7 +565,21 @@ def store_camera_calibration(cam_info: dict[str, typing.Any], output_dir: str | 
 
 
 def get_cam_info(cam_info_file: str | pathlib.Path) -> dict:
-    """Read camera info from a msgpack intrinsics file."""
+    """Read camera info from a msgpack intrinsics file.
+
+    The file contains entries keyed by resolution strings like ``"(1280, 720)"``.
+    Exactly one such entry must be present.
+
+    Args:
+        cam_info_file: Path to the ``.intrinsics`` msgpack file.
+
+    Returns:
+        The camera info dict for the single resolution entry found.
+
+    Raises:
+        RuntimeError: If zero or more than one resolution entry is found.
+
+    """
     with pathlib.Path(cam_info_file).open("rb") as f:
         cam_info = msgpack.unpack(f)
 
@@ -461,16 +593,31 @@ def get_cam_info(cam_info_file: str | pathlib.Path) -> dict:
 
 
 def get_scene_camera_resolution(input_dir: str | pathlib.Path, rec_info: Recording) -> np.ndarray:
-    """Get scene camera resolution from intrinsics file or video."""
+    """Get scene camera resolution from intrinsics file or video.
+
+    Tries ``world.intrinsics`` first; falls back to reading the scene
+    video dimensions via OpenCV.
+
+    Args:
+        input_dir: Recording directory that may contain ``world.intrinsics``.
+        rec_info: Recording metadata for locating the scene video.
+
+    Returns:
+        The resolution as a 2-element numpy array ``[width, height]``.
+
+    Raises:
+        RuntimeError: If the scene video cannot be opened.
+
+    """
     if (input_dir / "world.intrinsics").is_file():
         return np.array(get_cam_info(input_dir / "world.intrinsics")["resolution"])
-    import cv2
 
     cap = cv2.VideoCapture(rec_info.get_scene_video_path())
-    if cap.isOpened():
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        cap.release()
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open scene video to determine resolution: {rec_info.get_scene_video_path()}")
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
     return np.array([width, height])
 
 
@@ -480,7 +627,25 @@ def format_gaze_data_pupil_player(
     scene_video_dimensions: list[int],
     rec_info: Recording,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Format gaze data from a Pupil Player export."""
+    """Format gaze data from a Pupil Player or Neon Player export.
+
+    Reads gaze positions, extracts frame timestamps from the scene video,
+    corrects frame indices for any missing video frames using
+    ``world_lookup.npy`` or ``world_timestamps.npy``, and aligns gaze
+    timestamps to video time.
+
+    Args:
+        input_dir: Recording directory containing ``world_lookup.npy`` or
+            ``world_timestamps.npy``.
+        export_file: Path to the exported ``gaze_positions*.csv`` file.
+        scene_video_dimensions: Scene camera resolution ``[width, height]``.
+        rec_info: Recording metadata for locating the scene video.
+
+    Returns:
+        A tuple of (gaze DataFrame indexed by timestamp, frame timestamps
+        DataFrame).
+
+    """
     df = read_gaze_data_pupil_player(export_file, scene_video_dimensions, rec_info)
 
     # get timestamps for the scene video
@@ -535,7 +700,24 @@ def format_gaze_data_pupil_player(
 def read_gaze_data_pupil_player(
     file: str | pathlib.Path, scene_video_dimensions: list[int], rec_info: Recording
 ) -> pd.DataFrame:
-    """Convert the gaze_positions.csv file to a pandas dataframe"""
+    """Read and process gaze data from a Pupil/Neon Player export CSV.
+
+    Reads gaze positions, optionally joins pupil diameter data from
+    ``pupil_positions.csv``, renames columns to the common naming scheme,
+    marks low-confidence samples as NaN, and converts timestamps and
+    gaze coordinates to the expected units and coordinate system.
+
+    Args:
+        file: Path to the ``gaze_positions*.csv`` export file.
+        scene_video_dimensions: Scene camera resolution ``[width, height]``
+            for converting normalized gaze coordinates to pixels.
+        rec_info: Recording metadata (determines device-specific processing).
+
+    Returns:
+        A DataFrame with gaze data columns and timestamp column (not yet
+        set as index).
+
+    """
     is_core = rec_info.eye_tracker is EyeTracker.Pupil_Core
 
     file = pathlib.Path(file)
@@ -639,14 +821,27 @@ def read_gaze_data_pupil_player(
             1
         ]  # turn origin from bottom-left to top-left
 
-    # return the dataframe
     return df
 
 
 def format_gaze_data_cloud_export(
     input_dir: str | pathlib.Path, export_file: str | pathlib.Path
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Format gaze data from a Pupil Cloud export."""
+    """Format gaze data from a Pupil Cloud export.
+
+    Reads gaze data and frame timestamps from the Cloud export, converts
+    from nanoseconds to milliseconds with t=0 at video start, and assigns
+    frame indices to each gaze sample.
+
+    Args:
+        input_dir: Recording directory containing ``world_timestamps.csv``.
+        export_file: Path to the ``gaze.csv`` Cloud export file.
+
+    Returns:
+        A tuple of (gaze DataFrame indexed by timestamp, frame timestamps
+        DataFrame).
+
+    """
     df = read_gaze_data_cloud_export(export_file)
 
     frame_timestamps = pd.read_csv(input_dir / "world_timestamps.csv")
@@ -673,7 +868,20 @@ def format_gaze_data_cloud_export(
 
 
 def read_gaze_data_cloud_export(file: str | pathlib.Path) -> pd.DataFrame:
-    """Read and format gaze data from a Pupil Cloud export CSV file."""
+    """Read and format gaze data from a Pupil Cloud export CSV file.
+
+    Renames columns to the common naming scheme, optionally merges 3D eye
+    state data from ``3d_eye_states.csv``, and marks samples where the
+    tracker is not worn or during blinks as NaN.
+
+    Args:
+        file: Path to the ``gaze.csv`` Cloud export file.
+
+    Returns:
+        A DataFrame with gaze data columns and a ``timestamp`` column
+        (in nanoseconds, not yet converted or set as index).
+
+    """
     df = pd.read_csv(file)
 
     # rename and reorder columns

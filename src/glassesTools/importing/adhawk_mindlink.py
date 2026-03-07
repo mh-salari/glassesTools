@@ -23,7 +23,21 @@ def preprocess_data(
     source_dir_as_relative_path: bool = False,
     cam_cal_file: str | pathlib.Path | None = None,
 ) -> Recording:
-    """Run all preprocessing steps on AdHawk MindLink data and store in output_dir."""
+    """Run all preprocessing steps on AdHawk MindLink data and store in output_dir.
+
+    Args:
+        output_dir: Working directory where the imported recording will be placed.
+        source_dir: Path to the raw recording. Falls back to ``rec_info.source_directory``.
+        rec_info: Optional pre-populated recording metadata.
+        copy_scene_video: Whether to copy the scene video to output_dir.
+        source_dir_as_relative_path: Store source_dir as a relative path in rec_info.
+        cam_cal_file: Path to an external camera calibration file. If None,
+            hardcoded calibration values from AdHawk are used.
+
+    Returns:
+        The populated Recording object written to output_dir.
+
+    """
     from . import _store_data, check_folders
 
     output_dir, source_dir, rec_info, _ = check_folders(output_dir, source_dir, rec_info, EyeTracker.AdHawk_MindLink)
@@ -71,7 +85,18 @@ def preprocess_data(
 
 
 def get_recording_info(input_dir: str | pathlib.Path) -> Recording | None:
-    """Return recording info for the given directory, or None if not a valid recording."""
+    """Return recording info for an AdHawk MindLink recording directory.
+
+    Reads ``meta_data.json`` for duration and participant, and the first
+    gaze sample's UTC timestamp for the recording start time.
+
+    Args:
+        input_dir: Path to the AdHawk recording directory.
+
+    Returns:
+        A Recording object, or None if ``meta_data.json`` is not found.
+
+    """
     input_dir = pathlib.Path(input_dir)
     rec_info = Recording(source_directory=input_dir, eye_tracker=EyeTracker.AdHawk_MindLink)
 
@@ -90,7 +115,6 @@ def get_recording_info(input_dir: str | pathlib.Path) -> Recording | None:
     file = input_dir / gaze_entry["file_name"]
     with pathlib.Path(file).open(encoding="utf-8") as read_obj:
         csv_reader = csv.DictReader(read_obj)
-        # Iterate over each row in the csv using reader object
         sample = next(csv_reader)
     time_string = sample["UTC_Time"]
     if time_string[-1:] == "Z":
@@ -98,13 +122,21 @@ def get_recording_info(input_dir: str | pathlib.Path) -> Recording | None:
         time_string = time_string[:-1] + "+00:00"
     rec_info.start_time = timestamps.Timestamp(int(datetime.datetime.fromisoformat(time_string).timestamp()))
 
-    # we got a valid recording and at least some info if we got here
-    # return what we've got
     return rec_info
 
 
 def get_meta(input_dir: str | pathlib.Path, key: str | None = None) -> dict | None:
-    """Read meta_data.json and return the full dict or a specific key."""
+    """Read meta_data.json and return the full dict or a specific top-level key.
+
+    Args:
+        input_dir: Path to the AdHawk recording directory.
+        key: If given, return only this key from the JSON. Otherwise return
+            the entire dict.
+
+    Returns:
+        The parsed JSON dict (or a sub-dict), or None if the file doesn't exist.
+
+    """
     file = input_dir / "meta_data.json"
     if not file.is_file():
         return None
@@ -117,9 +149,18 @@ def get_meta(input_dir: str | pathlib.Path, key: str | None = None) -> dict | No
 
 
 def get_meta_entry(input_dir: str | pathlib.Path, entry_name: str) -> dict | None:
-    """Return the manifest entry matching the given type name."""
+    """Return the manifest entry whose type matches entry_name.
+
+    Args:
+        input_dir: Path to the AdHawk recording directory.
+        entry_name: The entry type to find (e.g., ``"gaze"``, ``"video"``,
+            ``"pupil_position"``).
+
+    Returns:
+        The matching manifest entry dict, or None if not found.
+
+    """
     manifest = get_meta(input_dir, key="manifest")
-    # get gaze file
     entry = None
     for e in manifest["entries"]:
         if e["type"].lower() == entry_name:
@@ -129,7 +170,19 @@ def get_meta_entry(input_dir: str | pathlib.Path, entry_name: str) -> dict | Non
 
 
 def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> None:
-    """Validate that rec_info matches the actual recording on disk."""
+    """Validate that rec_info matches the actual recording on disk.
+
+    Re-reads recording info from the directory and compares name, participant,
+    duration, and start time.
+
+    Args:
+        input_dir: Path to the AdHawk recording directory.
+        rec_info: Recording metadata to validate.
+
+    Raises:
+        ValueError: If any field in rec_info doesn't match the actual recording.
+
+    """
     actual_rec_info = get_recording_info(input_dir)
     if actual_rec_info is None or rec_info.name != actual_rec_info.name:
         raise ValueError(f'A recording with the name "{rec_info.name}" was not found in the folder {input_dir}.')
@@ -152,7 +205,20 @@ def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> None:
 def copy_adhawk_recording(
     input_dir: pathlib.Path, output_dir: pathlib.Path, copy_scene_video: bool
 ) -> tuple[pathlib.Path, pathlib.Path | None]:
-    """Copy the relevant files from the specified input dir to the specified output dir."""
+    """Copy the scene video from input_dir to output_dir.
+
+    Looks up the video filename from the manifest metadata.
+
+    Args:
+        input_dir: Source recording directory.
+        output_dir: Destination directory.
+        copy_scene_video: If True, copy the video file; otherwise return
+            the source path without copying.
+
+    Returns:
+        A tuple of (source video path, destination video path or None).
+
+    """
     # figure out what the video file is called
     vid_entry = get_meta_entry(input_dir, "video")
     src_file = input_dir / vid_entry["file_name"]
@@ -166,9 +232,17 @@ def copy_adhawk_recording(
 
 
 def get_camera_hardcoded(output_dir: str | pathlib.Path) -> np.ndarray:
-    """Get camera calibration.
+    """Write hardcoded camera calibration to an OpenCV XML file.
 
-    Hardcoded as per info received from AdHawk.
+    Uses calibration values provided by AdHawk (1280x720), including
+    camera position and rotation relative to the glasses frame.
+
+    Args:
+        output_dir: Directory where the calibration XML file is written.
+
+    Returns:
+        The scene camera resolution as a 2-element array ``[width, height]``.
+
     """
     # turn into camera matrix and distortion coefficients as used by OpenCV
     camera = {}
@@ -203,27 +277,46 @@ def get_camera_hardcoded(output_dir: str | pathlib.Path) -> np.ndarray:
 def format_gaze_data(
     input_dir: str | pathlib.Path, scene_video_dimensions: list[int], rec_info: Recording
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load gazedata csv file.
+    """Load and process AdHawk gaze data CSV files.
 
-    Format to get the gaze coordinates w/r/t world camera, and timestamps for every frame of video.
+    Parses gaze data, extracts frame timestamps from the scene video,
+    and returns both.
+
+    Args:
+        input_dir: Path to the AdHawk recording directory.
+        scene_video_dimensions: Scene camera resolution ``[width, height]``.
+        rec_info: Recording metadata for locating the scene video.
 
     Returns:
-        - formatted dataframe with cols for timestamp, frame_idx, and gaze data
-        - np array of frame timestamps
+        A tuple of (gaze DataFrame indexed by timestamp, frame timestamps DataFrame).
 
     """
-    # convert the json file to pandas dataframe
     df = csv2df(input_dir, scene_video_dimensions)
 
     # read video file, create array of frame timestamps
     frame_timestamps = video_utils.get_frame_timestamps_from_video(rec_info.get_scene_video_path())
 
-    # return the gaze data df and frame time stamps array
     return df, frame_timestamps
 
 
 def csv2df(input_dir: str | pathlib.Path, scene_video_dimensions: list[int]) -> pd.DataFrame:
-    """Convert the gaze_data.csv file to a pandas dataframe."""
+    """Parse AdHawk gaze and pupil position CSVs into a single DataFrame.
+
+    Reads the gaze CSV and pupil position CSV (from the manifest), merges
+    them on timestamp, converts to milliseconds in video time, scales
+    normalized gaze coordinates to pixels, and transforms coordinates
+    from AdHawk's system (Y-up, Z-backward) to the common system
+    (Y-down, Z-forward).
+
+    Args:
+        input_dir: Path to the AdHawk recording directory.
+        scene_video_dimensions: Scene camera resolution ``[width, height]``
+            for converting normalized gaze coordinates to pixels.
+
+    Returns:
+        A DataFrame indexed by timestamp (ms) with gaze data columns.
+
+    """
     vid_entry = get_meta_entry(input_dir, "video")
     gaze_entry = get_meta_entry(input_dir, "gaze")
 
@@ -316,5 +409,4 @@ def csv2df(input_dir: str | pathlib.Path, scene_video_dimensions: list[int]) -> 
     df.loc[:, "gaze_pos_3d_y"] *= 1000
     df.loc[:, "gaze_pos_3d_z"] *= 1000
 
-    # return the dataframe
     return df

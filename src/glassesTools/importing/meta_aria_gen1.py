@@ -18,7 +18,21 @@ def import_data(
     copy_scene_video: bool = True,
     source_dir_as_relative_path: bool = False,
 ) -> Recording:
-    """Run all preprocessing steps on Meta Aria Gen 1 data and store in output_dir."""
+    """Import Meta Aria Gen 1 data (pre-exported via meta_aria_gen1_exporter.py).
+
+    Args:
+        output_dir: Working directory where the imported recording will be placed.
+        source_dir: Path to the exported recording directory containing
+            ``metadata.json``, ``gaze.tsv``, ``worldCamera.mp4``, and
+            ``calibration.xml``.
+        rec_info: Optional pre-populated recording metadata.
+        copy_scene_video: Whether to copy the scene video to output_dir.
+        source_dir_as_relative_path: Store source_dir as a relative path in rec_info.
+
+    Returns:
+        The populated Recording object written to output_dir.
+
+    """
     from . import _store_data, check_folders
 
     output_dir, source_dir, rec_info, _ = check_folders(output_dir, source_dir, rec_info, EyeTracker.Meta_Aria_Gen_1)
@@ -55,7 +69,18 @@ def import_data(
 
 
 def get_recording_info(input_dir: str | pathlib.Path) -> Recording | None:
-    """Return recording info for the given directory, or None if not a valid recording."""
+    """Return recording info for a Meta Aria Gen 1 export directory.
+
+    Reads ``metadata.json`` for recording name, duration, serial numbers,
+    and start time. All expected files must be present.
+
+    Args:
+        input_dir: Path to the exported recording directory.
+
+    Returns:
+        A Recording object, or None if required files are missing.
+
+    """
     input_dir = pathlib.Path(input_dir)
     rec_info = Recording(source_directory=input_dir, eye_tracker=EyeTracker.Meta_Aria_Gen_1)
 
@@ -76,13 +101,20 @@ def get_recording_info(input_dir: str | pathlib.Path) -> Recording | None:
     rec_info.start_time = timestamps.Timestamp(metadata["start_time"])
     rec_info.scene_video_file = "worldCamera.mp4"
 
-    # we got a valid recording
-    # return what we've got
     return rec_info
 
 
 def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> None:
-    """Validate that rec_info matches the actual recording on disk."""
+    """Validate that rec_info matches the actual recording on disk.
+
+    Args:
+        input_dir: Path to the exported recording directory.
+        rec_info: Recording metadata to validate.
+
+    Raises:
+        ValueError: If the recording name or eye tracker type doesn't match.
+
+    """
     actual_rec_info = get_recording_info(input_dir)
 
     if actual_rec_info is None or rec_info.name != actual_rec_info.name:
@@ -98,7 +130,26 @@ def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> None:
 def copy_recording(
     input_dir: pathlib.Path, output_dir: pathlib.Path, rec_info: Recording, copy_scene_video: bool
 ) -> tuple[pathlib.Path, pathlib.Path | None, pd.DataFrame, pd.DataFrame]:
-    """Copy recording files to output dir and return video paths, gaze data, and frame timestamps."""
+    """Copy recording files to output dir and prepare gaze data.
+
+    Copies the scene video and calibration XML, reads the gaze TSV,
+    converts gaze timestamps from microseconds to milliseconds, and
+    assigns frame indices to each gaze sample.
+
+    Args:
+        input_dir: Source recording directory.
+        output_dir: Destination directory.
+        rec_info: Recording metadata for locating the scene video.
+        copy_scene_video: Whether to copy the scene video file.
+
+    Returns:
+        A tuple of (source video path, destination video path or None,
+        gaze DataFrame, frame timestamps DataFrame).
+
+    Raises:
+        RuntimeError: If expected files are missing.
+
+    """
     gaze_file = input_dir / "gaze.tsv"
     if not gaze_file.is_file():
         raise RuntimeError(f"The {gaze_file} file is not found in the input directory {input_dir}")

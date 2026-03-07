@@ -27,7 +27,21 @@ def preprocess_data(
     source_dir_as_relative_path: bool = False,
     cam_cal_file: str | pathlib.Path | None = None,
 ) -> Recording:
-    """Run all preprocessing steps on Argus ETVision data and store in output_dir."""
+    """Run all preprocessing steps on Argus ETVision data and store in output_dir.
+
+    Args:
+        output_dir: Working directory where the imported recording will be placed.
+        source_dir: Path to the raw recording. Falls back to ``rec_info.source_directory``.
+        rec_info: Optional pre-populated recording metadata. If not provided,
+            the first recording found in source_dir is used.
+        copy_scene_video: Whether to copy the scene video to output_dir.
+        source_dir_as_relative_path: Store source_dir as a relative path in rec_info.
+        cam_cal_file: Path to an external camera calibration file.
+
+    Returns:
+        The populated Recording object written to output_dir.
+
+    """
     from . import _store_data, check_folders
 
     output_dir, source_dir, rec_info, _ = check_folders(output_dir, source_dir, rec_info, EyeTracker.Argus_ETVision)
@@ -35,15 +49,15 @@ def preprocess_data(
 
     # check and copy needed files to the output directory
     print("  Check and copy raw data...")
-    # check tobii recording and get export directory
     if rec_info is not None:
         check_recording(source_dir, rec_info)
     else:
-        rec_info = get_recording_info(source_dir)
-        if rec_info is None:
+        rec_infos = get_recording_info(source_dir)
+        if rec_infos is None:
             raise RuntimeError(
                 f"The folder {source_dir} is not recognized as a {EyeTracker.Argus_ETVision.value} recording."
             )
+        rec_info = rec_infos[0]
 
     # make output dir
     if not output_dir.is_dir():
@@ -69,10 +83,19 @@ def preprocess_data(
 
 
 def get_recording_info(input_dir: str | pathlib.Path) -> list[Recording] | None:
-    """Return recording info for the given directory, or None if not a valid recording."""
+    """Return recording info for all Argus ETVision recordings in input_dir.
+
+    Recordings are identified by matching ``.csv`` and ``_Scene.wmv`` files.
+    The CSV header line is parsed for firmware version and recording start time.
+
+    Args:
+        input_dir: Path to the Argus ETVision recording directory.
+
+    Returns:
+        A list of Recording objects, or None if no valid recordings are found.
+
+    """
     input_dir = pathlib.Path(input_dir)
-    # recordings are identified as a tsv and an mkv file with the
-    # same name
     rec_infos: list[Recording] = []
     for r in input_dir.glob("*.csv"):
         if not r.with_name(f"{r.stem}_Scene.wmv").is_file():
@@ -96,7 +119,19 @@ def get_recording_info(input_dir: str | pathlib.Path) -> list[Recording] | None:
 
 
 def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> bool:
-    """Check that the expected recording files exist on disk."""
+    """Check that the expected CSV and scene video files exist for a recording.
+
+    Args:
+        input_dir: Path to the Argus ETVision recording directory.
+        rec_info: Recording metadata identifying which recording to check.
+
+    Returns:
+        True if all required files exist.
+
+    Raises:
+        RuntimeError: If any required file is missing.
+
+    """
     for suff in (".csv", "_Scene.wmv"):
         file = f"{rec_info.name}{suff}"
         if not (input_dir / file).is_file():
@@ -108,8 +143,16 @@ def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> bool:
 def copy_et_vision_recording(
     input_dir: pathlib.Path, output_dir: pathlib.Path, rec_info: Recording, copy_scene_video: bool
 ) -> None:
-    """Copy the relevant files from the specified input dir to the specified output dir."""
-    # Copy relevant files to new directory
+    """Copy the scene video (WMV) from input_dir to output_dir.
+
+    Args:
+        input_dir: Source recording directory.
+        output_dir: Destination directory.
+        rec_info: Recording metadata (updated with the scene video filename).
+        copy_scene_video: If True, copy the video file; otherwise just record
+            the source filename in rec_info.
+
+    """
     src_file = input_dir / f"{rec_info.name}_Scene.wmv"
 
     if copy_scene_video:
@@ -125,16 +168,19 @@ def copy_et_vision_recording(
 
 
 def format_gaze_data(input_dir: str | pathlib.Path, rec_info: Recording) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load gaze data csv file.
+    """Load and process Argus ETVision gaze data CSV file.
 
-    Format to get the gaze coordinates w/r/t world camera, and timestamps for every frame of video.
+    Parses the gaze CSV, extracts frame timestamps from the scene video,
+    and assigns frame indices to each gaze sample based on timestamps.
+
+    Args:
+        input_dir: Path to the Argus ETVision recording directory.
+        rec_info: Recording metadata identifying which recording to process.
 
     Returns:
-        - formatted dataframe with cols for timestamp, frame_idx, and gaze data
-        - np array of frame timestamps
+        A tuple of (gaze DataFrame indexed by timestamp, frame timestamps DataFrame).
 
     """
-    # convert the json file to pandas dataframe
     df = gaze2df(pathlib.Path(input_dir) / f"{rec_info.name}.csv")
 
     # read video file, create array of frame timestamps
@@ -144,12 +190,23 @@ def format_gaze_data(input_dir: str | pathlib.Path, rec_info: Recording) -> tupl
     frame_idx = video_utils.timestamps_to_frame_number(df.index, frame_timestamps["timestamp"].to_numpy())
     df.insert(0, "frame_idx", frame_idx["frame_idx"])
 
-    # return the gaze data df and frame time stamps array
     return df, frame_timestamps
 
 
 def gaze2df(gaze_file: str | pathlib.Path) -> pd.DataFrame:
-    """Convert the .tsv file to a pandas dataframe"""
+    """Parse an Argus ETVision gaze CSV file into a pandas DataFrame.
+
+    Reads the CSV (skipping the metadata header line), renames columns to
+    the common naming scheme, and converts timestamps from seconds to
+    milliseconds.
+
+    Args:
+        gaze_file: Path to the gaze data CSV file.
+
+    Returns:
+        A DataFrame indexed by timestamp (ms) with gaze data columns.
+
+    """
     df = pd.read_csv(gaze_file, index_col=False, skiprows=1)
 
     # rename and reorder columns
@@ -170,5 +227,4 @@ def gaze2df(gaze_file: str | pathlib.Path) -> pd.DataFrame:
     df.loc[:, "timestamp"] *= 1000.0
     df = df.set_index("timestamp")
 
-    # return the dataframe
     return df

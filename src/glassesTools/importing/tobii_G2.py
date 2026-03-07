@@ -34,7 +34,22 @@ def preprocess_data(
     copy_scene_video: bool = True,
     source_dir_as_relative_path: bool = False,
 ) -> Recording:
-    """Run all preprocessing steps on Tobii Glasses 2 data and store in output_dir."""
+    """Run all preprocessing steps on Tobii Glasses 2 data and store in output_dir.
+
+    Copies scene video and gaze data, extracts camera calibration from
+    the binary TSLV file, and formats gaze data from ``livedata.json``.
+
+    Args:
+        output_dir: Working directory where the imported recording will be placed.
+        source_dir: Path to the raw recording. Falls back to ``rec_info.source_directory``.
+        rec_info: Optional pre-populated recording metadata.
+        copy_scene_video: Whether to copy the scene video to output_dir.
+        source_dir_as_relative_path: Store source_dir as a relative path in rec_info.
+
+    Returns:
+        The populated Recording object written to output_dir.
+
+    """
     from . import _store_data, check_folders
 
     output_dir, source_dir, rec_info, _ = check_folders(output_dir, source_dir, rec_info, EyeTracker.Tobii_Glasses_2)
@@ -77,7 +92,19 @@ def preprocess_data(
 
 
 def get_recording_info(input_dir: str | pathlib.Path) -> Recording | None:
-    """Return recording info for the given directory, or None if not a valid recording."""
+    """Return recording info for a Tobii Glasses 2 recording directory.
+
+    Reads ``participant.json``, ``recording.json``, and ``sysinfo.json``
+    to populate participant name, recording name, duration, start time,
+    firmware version, and serial numbers.
+
+    Args:
+        input_dir: Path to the Tobii Glasses 2 recording directory.
+
+    Returns:
+        A Recording object, or None if required JSON files are missing.
+
+    """
     input_dir = pathlib.Path(input_dir)
     rec_info = Recording(source_directory=input_dir, eye_tracker=EyeTracker.Tobii_Glasses_2)
 
@@ -114,13 +141,23 @@ def get_recording_info(input_dir: str | pathlib.Path) -> Recording | None:
     rec_info.glasses_serial = i_info["hu_serial"]
     rec_info.recording_unit_serial = i_info["ru_serial"]
 
-    # we got a valid recording and at least some info if we got here
-    # return what we've got
     return rec_info
 
 
 def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> None:
-    """Validate that rec_info matches the actual recording on disk."""
+    """Validate that rec_info matches the actual recording on disk.
+
+    Re-reads recording info and compares participant, duration, start time,
+    firmware version, and serial numbers.
+
+    Args:
+        input_dir: Path to the Tobii Glasses 2 recording directory.
+        rec_info: Recording metadata to validate.
+
+    Raises:
+        ValueError: If any field in rec_info doesn't match the actual recording.
+
+    """
     actual_rec_info = get_recording_info(input_dir)
     if actual_rec_info is None or rec_info.name != actual_rec_info.name:
         raise ValueError(f'A recording with the name "{rec_info.name}" was not found in the folder {input_dir}.')
@@ -155,8 +192,22 @@ def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> None:
 def copy_tobii_recording(
     input_dir: pathlib.Path, output_dir: pathlib.Path, copy_scene_video: bool
 ) -> tuple[pathlib.Path, pathlib.Path | None]:
-    """Copy the relevant files from the specified input dir to the specified output dir."""
-    # Copy relevent files to new directory
+    """Copy scene video and decompress gaze/TSLV data to output dir.
+
+    Copies ``fullstream.mp4`` from ``segments/1/`` and decompresses
+    ``livedata.json.gz`` and ``et.tslv.gz`` into the output directory.
+
+    Args:
+        input_dir: Source recording directory.
+        output_dir: Destination directory.
+        copy_scene_video: If True, copy the video file; otherwise just
+            return the source path.
+
+    Returns:
+        A tuple of (source video path, destination video path or None).
+
+    """
+    # navigate into the recording's segment directory
     input_dir = input_dir / "segments" / "1"
     src_file = input_dir / "fullstream.mp4"
     if copy_scene_video:
@@ -177,7 +228,20 @@ def copy_tobii_recording(
 
 
 def get_camera_from_tslv(input_dir: str | pathlib.Path) -> np.ndarray:
-    """Read binary TSLV file until camera calibration information is retrieved."""
+    """Read camera calibration from the binary TSLV file.
+
+    Parses the ``et.tslv`` file for the camera record (type 300), extracts
+    intrinsic parameters (focal length, principal point, distortion), builds
+    an OpenCV-style camera matrix, and writes the calibration XML. The TSLV
+    file is deleted after extraction.
+
+    Args:
+        input_dir: Directory containing the decompressed ``et.tslv`` file.
+
+    Returns:
+        The scene camera resolution as a numpy array ``[width, height]``.
+
+    """
     with pathlib.Path(str(input_dir / "et.tslv")).open("rb") as f:
         # first look for camera item (TSLV type==300)
         while True:
@@ -235,13 +299,19 @@ def get_camera_from_tslv(input_dir: str | pathlib.Path) -> np.ndarray:
 def format_gaze_data(
     input_dir: str | pathlib.Path, scene_video_dimensions: list[int], rec_info: Recording
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load livedata.json.
+    """Load and process Tobii Glasses 2 gaze data from livedata.json.
 
-    Format to get the gaze coordinates w/r/t world camera, and timestamps for every frame of video.
+    Parses the JSON gaze data, extracts frame timestamps from the scene
+    video, and assigns frame indices to each gaze sample.
+
+    Args:
+        input_dir: Directory containing the decompressed ``livedata.json``.
+        scene_video_dimensions: Scene camera resolution ``[width, height]``.
+        rec_info: Recording metadata for locating the scene video.
 
     Returns:
-        - formatted dataframe with cols for timestamp, frame_idx, and gaze data
-        - np array of frame timestamps
+        A tuple of (gaze DataFrame indexed by timestamp, frame timestamps
+        DataFrame).
 
     """
     # convert the json file to pandas dataframe
@@ -257,12 +327,27 @@ def format_gaze_data(
     # build the formatted dataframe
     df.index.name = "timestamp"
 
-    # return the gaze data df and frame time stamps array
     return df, frame_timestamps
 
 
 def json2df(json_file: str | pathlib.Path, scene_video_dimensions: list[int]) -> pd.DataFrame:
-    """Convert the livedata.json file to a pandas dataframe"""
+    """Parse Tobii Glasses 2 livedata.json into a pandas DataFrame.
+
+    Each line in the JSON file is a separate object containing either a
+    video timestamp sync point (``vts``), eye data (``eye``), 2D gaze
+    position (``gp``), or 3D gaze position (``gp3``). Timestamps are
+    converted from microseconds to milliseconds relative to video start.
+    The JSON file is deleted after parsing.
+
+    Args:
+        json_file: Path to the ``livedata.json`` file.
+        scene_video_dimensions: Scene camera resolution ``[width, height]``
+            for converting normalized gaze coordinates to pixels.
+
+    Returns:
+        A DataFrame indexed by timestamp (ms) with gaze data columns.
+
+    """
     # dicts to store sync points
     vts_sync: list[tuple[int, int]] = []  # scene video timestamp sync
     gaze_data: dict[int, dict[str, float]] = {}  # gaze data
@@ -295,7 +380,6 @@ def json2df(json_file: str | pathlib.Path, scene_video_dimensions: list[int]) ->
             which_eye = entry["eye"][:1]
             if "pc" in entry:
                 # origin of gaze vector is the pupil center
-                gaze_data[entry["ts"]]["gaze_ori_" + which_eye + "_x"] = entry["pc"][0] if not is_error else math.nan
                 gaze_data[entry["ts"]]["gaze_ori_" + which_eye + "_x"] = entry["pc"][0] if not is_error else math.nan
                 gaze_data[entry["ts"]]["gaze_ori_" + which_eye + "_y"] = entry["pc"][1] if not is_error else math.nan
                 gaze_data[entry["ts"]]["gaze_ori_" + which_eye + "_z"] = entry["pc"][2] if not is_error else math.nan
@@ -330,5 +414,4 @@ def json2df(json_file: str | pathlib.Path, scene_video_dimensions: list[int]) ->
     # json no longer needed, remove
     json_file.unlink(missing_ok=True)
 
-    # return the dataframe
     return df

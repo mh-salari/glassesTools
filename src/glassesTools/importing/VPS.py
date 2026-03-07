@@ -29,7 +29,28 @@ def preprocess_data(
     source_dir_as_relative_path: bool = False,
     cam_cal_file: str | pathlib.Path | None = None,
 ) -> Recording:
-    """Run all preprocessing steps on VPS data and store in output_dir."""
+    """Run all preprocessing steps on VPS data and store in output_dir.
+
+    Supports both VPS 19 and VPS Lite devices.
+
+    Args:
+        output_dir: Working directory where the imported recording will be placed.
+        device: Eye tracker type (``VPS_19`` or ``VPS_Lite``).
+        source_dir: Path to the raw recording. Falls back to ``rec_info.source_directory``.
+        rec_info: Optional pre-populated recording metadata. If not provided,
+            the first recording found in source_dir is used.
+        copy_scene_video: Whether to copy the scene video to output_dir.
+        source_dir_as_relative_path: Store source_dir as a relative path in rec_info.
+        cam_cal_file: Path to an external camera calibration file.
+
+    Returns:
+        The populated Recording object written to output_dir.
+
+    Raises:
+        ValueError: If the device is not a VPS type.
+        RuntimeError: If source_dir is not a valid VPS recording.
+
+    """
     from . import _store_data, check_device, check_folders
 
     device, rec_info, _ = check_device(device, rec_info)
@@ -42,13 +63,13 @@ def preprocess_data(
 
     # check and copy needed files to the output directory
     print("  Check and copy raw data...")
-    # check tobii recording and get export directory
     if rec_info is not None:
         check_recording(device, source_dir, rec_info)
     else:
-        rec_info = get_recording_info(source_dir)
-        if rec_info is None:
+        rec_infos = get_recording_info(source_dir, device)
+        if rec_infos is None:
             raise RuntimeError(f"The folder {source_dir} is not recognized as a {device.value} recording.")
+        rec_info = rec_infos[0]
 
     # make output dir
     if not output_dir.is_dir():
@@ -74,7 +95,21 @@ def preprocess_data(
 
 
 def get_recording_info(input_dir: str | pathlib.Path, device: EyeTracker) -> list[Recording] | None:
-    """Return recording info for the given directory, or None if not a valid recording."""
+    """Return recording info for all VPS recordings in input_dir.
+
+    Recordings are identified by matching ``.tsv`` and video files with the
+    same stem. The TSV header is parsed for device metadata (serial numbers,
+    firmware version, recording start time).
+
+    Args:
+        input_dir: Path to the VPS recording directory.
+        device: Eye tracker type (``VPS_19`` or ``VPS_Lite``), determines
+            which video extensions and metadata keys to look for.
+
+    Returns:
+        A list of Recording objects, or None if no valid recordings are found.
+
+    """
     input_dir = pathlib.Path(input_dir)
 
     if device == EyeTracker.VPS_19:
@@ -116,7 +151,20 @@ def get_recording_info(input_dir: str | pathlib.Path, device: EyeTracker) -> lis
 
 
 def check_recording(device: EyeTracker, input_dir: str | pathlib.Path, rec_info: Recording) -> bool:
-    """Check that the expected recording files exist on disk."""
+    """Check that the expected TSV and video files exist for a recording.
+
+    Args:
+        device: Eye tracker type, determines expected video file extensions.
+        input_dir: Path to the VPS recording directory.
+        rec_info: Recording metadata identifying which recording to check.
+
+    Returns:
+        True if all required files exist.
+
+    Raises:
+        RuntimeError: If any required file is missing.
+
+    """
     input_dir = pathlib.Path(input_dir)
 
     if device == EyeTracker.VPS_19:
@@ -140,8 +188,19 @@ def check_recording(device: EyeTracker, input_dir: str | pathlib.Path, rec_info:
 def copy_vps_recording(
     device: EyeTracker, input_dir: pathlib.Path, output_dir: pathlib.Path, rec_info: Recording, copy_scene_video: bool
 ) -> None:
-    """Copy the relevant files from the specified input dir to the specified output dir."""
-    # Copy relevant files to new directory
+    """Copy the scene video from input_dir to output_dir.
+
+    VPS 19 prefers ``.mkv`` but falls back to ``.mp4``; VPS Lite uses ``.mp4``.
+
+    Args:
+        device: Eye tracker type, determines video file extension preference.
+        input_dir: Source recording directory.
+        output_dir: Destination directory.
+        rec_info: Recording metadata (updated with the scene video filename).
+        copy_scene_video: If True, copy the video file; otherwise just record
+            the source filename in rec_info.
+
+    """
     if device == EyeTracker.VPS_19:
         src_file = input_dir / f"{rec_info.name}.mkv"
         if not src_file.is_file():
@@ -162,30 +221,45 @@ def copy_vps_recording(
 
 
 def format_gaze_data(input_dir: str | pathlib.Path, rec_info: Recording) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load gazedata tsv file.
+    """Load and process the VPS gaze data TSV file.
 
-    Format to get the gaze coordinates w/r/t world camera, and timestamps for every frame of video.
+    Parses the tab-delimited gaze data and extracts frame timestamps
+    from the scene video.
+
+    Args:
+        input_dir: Path to the VPS recording directory.
+        rec_info: Recording metadata identifying which recording to process.
 
     Returns:
-        - formatted dataframe with cols for timestamp, frame_idx, and gaze data
-        - np array of frame timestamps
+        A tuple of (gaze DataFrame indexed by timestamp, frame timestamps DataFrame).
 
     """
-    # convert the json file to pandas dataframe
     df = gaze2df(input_dir / f"{rec_info.name}.tsv")
 
     # read video file, create array of frame timestamps
     frame_timestamps = video_utils.get_frame_timestamps_from_video(rec_info.get_scene_video_path())
 
-    # return the gaze data df and frame time stamps array
     return df, frame_timestamps
 
 
 def gaze2df(gaze_file: str | pathlib.Path) -> pd.DataFrame:
-    """Convert the .tsv file to a pandas dataframe"""
+    """Parse a VPS gaze TSV file into a pandas DataFrame.
+
+    Reads the tab-delimited file (skipping ``#`` header lines), syncs gaze
+    timestamps to media time using the offset between FrontTimeStamp and
+    MediaTimeStamp, renames columns to the common naming scheme, and
+    converts timestamps from seconds to milliseconds.
+
+    Args:
+        gaze_file: Path to the ``.tsv`` gaze data file.
+
+    Returns:
+        A DataFrame indexed by timestamp (ms) with gaze data columns.
+
+    """
     df = pd.read_csv(gaze_file, delimiter="\t", comment="#", index_col=False)
 
-    # get time sync info
+    # offset between gaze clock and media clock, used to align gaze timestamps to video
     t0 = df["FrontTimeStamp"].iloc[0] - df["MediaTimeStamp"].iloc[0]
 
     # rename and reorder columns
@@ -222,5 +296,4 @@ def gaze2df(gaze_file: str | pathlib.Path) -> pd.DataFrame:
     df.loc[:, "timestamp"] *= 1000.0
     df = df.set_index("timestamp")
 
-    # return the dataframe
     return df
