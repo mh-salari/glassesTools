@@ -13,19 +13,42 @@ from .mp4analyser import iso
 def av_rescale(a: np.int64, b: np.int64, c: np.int64) -> np.int64:
     """Scale ``a`` from timebase ``c`` to timebase ``b``, rounding to nearest.
 
+    Computes ``a * b / c`` with rounding halfway cases away from zero.
     Ported from ffmpeg libavutil mathematics.c (simple case, a/b/c <= INT_MAX).
+
+    Args:
+        a: Value to rescale.
+        b: Target timebase.
+        c: Source timebase.
+
+    Returns:
+        Rescaled value.
+
     """
     r = c // 2
     return (a * b + r) // c
 
 
 def is_isobmmf(vid_file: pathlib.Path) -> bool:
-    """Return True if the file extension indicates an ISO base media file format."""
+    """Return ``True`` if the file extension indicates an ISO base media file format.
+
+    Args:
+        vid_file: Path to the video file.
+
+    """
     return vid_file.suffix in {".mov", ".mp4", ".m4a", ".3gp", ".3g2", ".mj2"}
 
 
 def _get_isobmmf_timestamps(vid_file: pathlib.Path) -> np.ndarray | None:
-    # parse mp4 file
+    """Extract frame timestamps from an ISO BMFF file by parsing MP4 box structure.
+
+    Walks the moov/trak/stbl hierarchy to read stts (decode timestamps)
+    and ctts (composition offsets), applies edit lists, and returns
+    presentation timestamps in milliseconds.
+
+    Returns ``None`` if the file lacks a moov box.
+
+    """
     boxes = iso.Mp4File(str(vid_file))
     summary = boxes.get_summary()
     if "track_list" not in summary:
@@ -147,6 +170,7 @@ def _get_isobmmf_timestamps(vid_file: pathlib.Path) -> np.ndarray | None:
 
 
 def _get_frame_timestamps_ffprobe(vid_file: pathlib.Path) -> np.array:
+    """Extract frame timestamps via ffprobe, returned in milliseconds."""
     command = [
         "ffprobe",
         "-v",
@@ -170,7 +194,7 @@ def _get_frame_timestamps_ffprobe(vid_file: pathlib.Path) -> np.array:
 
 
 def _get_frame_timestamps_opencv(vid_file: pathlib.Path) -> np.array:
-    # open file with opencv and get timestamps of each frame
+    """Extract frame timestamps via OpenCV's ``CAP_PROP_POS_MSEC``, in milliseconds."""
     vid = cv2.VideoCapture(vid_file)
     nframes = float(vid.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_ts = []
@@ -205,6 +229,7 @@ def _get_frame_timestamps_opencv(vid_file: pathlib.Path) -> np.array:
 
 
 def _get_frame_timestamps_from_video(vid_file: pathlib.Path) -> np.array:
+    """Get frame timestamps using the best available method for the file type."""
     if is_isobmmf(vid_file):
         ts = _get_isobmmf_timestamps(vid_file)
         if ts is None:
@@ -217,10 +242,18 @@ def _get_frame_timestamps_from_video(vid_file: pathlib.Path) -> np.array:
 
 
 def get_frame_timestamps_from_video(vid_file: pathlib.Path) -> pd.DataFrame:
-    """Parse the supplied video, return an array of frame timestamps.
+    """Parse the supplied video, return a DataFrame of frame timestamps.
 
-    There must be only one video stream in the video file, because otherwise
-    we do not know which is the correct stream.
+    There must be only one video stream in the video file, because
+    otherwise we do not know which is the correct stream.
+
+    Args:
+        vid_file: Path to the video file.
+
+    Returns:
+        DataFrame indexed by ``frame_idx`` with a ``timestamp`` column
+        (milliseconds).
+
     """
     frame_ts = _get_frame_timestamps_from_video(vid_file)
 
@@ -231,7 +264,12 @@ def get_frame_timestamps_from_video(vid_file: pathlib.Path) -> pd.DataFrame:
 
 
 def get_video_duration(vid_file: pathlib.Path) -> float:
-    """Return the duration of a video file in milliseconds."""
+    """Return the duration of a video file in milliseconds.
+
+    Args:
+        vid_file: Path to the video file.
+
+    """
     if is_isobmmf(vid_file):
         frame_ts = _get_frame_timestamps_from_video(vid_file)
         return float(frame_ts[-1] - frame_ts[0])
@@ -245,7 +283,20 @@ def get_video_duration(vid_file: pathlib.Path) -> float:
 def timestamps_to_frame_number(
     ts: np.ndarray, frame_timestamps: np.ndarray | list, mode: str = "nearest", trim: bool = False
 ) -> pd.DataFrame:
-    """Map timestamps to frame numbers using the given frame-timestamp array."""
+    """Map timestamps to frame numbers using the given frame-timestamp array.
+
+    Args:
+        ts: Timestamps to look up (milliseconds).
+        frame_timestamps: Sorted array of frame timestamps (milliseconds).
+        mode: Matching strategy — ``"nearest"`` for closest frame, or
+            ``"after"`` for the frame during which the timestamp occurred.
+        trim: If ``True``, set frame indices to ``-1`` for timestamps
+            outside the video range.
+
+    Returns:
+        DataFrame indexed by *ts* with a ``frame_idx`` column.
+
+    """
     df = pd.DataFrame(index=ts)
     df.insert(0, "frame_idx", np.int64(0))
     if isinstance(frame_timestamps, list):

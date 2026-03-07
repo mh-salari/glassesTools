@@ -38,35 +38,57 @@ class Recording:
     duration: float = None
 
     def store_as_json(self, path: str | pathlib.Path) -> None:
-        """Serialize recording metadata to a JSON file."""
+        """Serialize recording metadata to a JSON file.
+
+        Args:
+            path: File or directory path. If a directory, uses
+                ``default_json_file_name``.
+
+        """
         path = pathlib.Path(path)
         if path.is_dir():
             path /= self.default_json_file_name
-        # remove any crap potentially added by subclasses
+        # Strip subclass-added fields; keep only Recording's own fields
+        # (excluding working_directory, which is inferred from the file path on load)
         to_dump = dataclasses.asdict(self)
-        to_dump = {
-            k: to_dump[k] for k in to_dump if k in Recording.__annotations__ and k != "working_directory"
-        }  # working_directory will be loaded as the provided path, and shouldn't be stored
+        to_dump = {k: to_dump[k] for k in to_dump if k in Recording.__annotations__ and k != "working_directory"}
         # dump to file
         json.dump(to_dump, path)
 
     @staticmethod
     def load_from_json(path: str | pathlib.Path) -> "Recording":
-        """Deserialize recording metadata from a JSON file."""
+        """Deserialize recording metadata from a JSON file.
+
+        Args:
+            path: File or directory path. If a directory, uses
+                ``default_json_file_name``.
+
+        Returns:
+            A ``Recording`` with ``working_directory`` set to the
+            parent of the JSON file.
+
+        """
         path = pathlib.Path(path)
         if path.is_dir():
             path /= Recording.default_json_file_name
         kwds = json.load(path)
-        # roundtrip the enum
         if "type" in kwds:
             kwds["type"] = Type(kwds["type"])
-        # backwards compat
+        # Backwards compat: older files may lack a type field
         if "type" not in kwds:
             kwds["type"] = Type.External
         return Recording(**kwds, working_directory=path.parent)
 
     def get_video_path(self) -> pathlib.Path:
-        """Resolve the full path to the video file."""
+        """Resolve the full path to the video file.
+
+        Falls back to the source directory if the file is not found in
+        the working directory.
+
+        Returns:
+            Path to the video file.
+
+        """
         vid = self.working_directory / self.video_file
         if not vid.is_file():
             if not self.source_directory.is_absolute():
@@ -76,7 +98,12 @@ class Recording:
         return vid
 
     def get_source_directory(self) -> pathlib.Path | None:
-        """Resolve the full path to the source directory."""
+        """Resolve the full path to the source directory.
+
+        Returns:
+            Absolute path to the source directory, or ``None`` if unset.
+
+        """
         if not self.source_directory:
             return None
         if not self.source_directory.is_absolute():
@@ -90,7 +117,28 @@ def do_import(
     copy_video: bool = True,
     source_dir_as_relative_path: bool = False,
 ) -> Recording:
-    """Import a camera recording into the working directory."""
+    """Import a camera recording into the working directory.
+
+    Copies the video file and camera calibration, extracts frame
+    timestamps, and writes recording metadata as JSON.
+
+    Args:
+        rec_info: Recording descriptor with ``source_directory`` and
+            ``working_directory`` set.
+        cam_cal_file: Path to camera calibration XML file to copy.
+        copy_video: If ``True``, copy the video file into the working
+            directory.
+        source_dir_as_relative_path: If ``True``, store the source
+            directory as a relative path in the JSON metadata.
+
+    Returns:
+        The updated ``Recording`` with duration filled in.
+
+    Raises:
+        ValueError: If ``working_directory`` is not set.
+        FileNotFoundError: If the source video file does not exist.
+
+    """
     if not rec_info.working_directory:
         raise ValueError("working_directory must be set on the rec_info object")
     rec_info.working_directory = pathlib.Path(rec_info.working_directory)

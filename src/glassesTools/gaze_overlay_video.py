@@ -36,7 +36,19 @@ class VideoMaker:
         camera_calibration_file: str | pathlib.Path | ocv.CameraParams,
         gaze_data_file: str | pathlib.Path | dict[int, list[gaze_headref.Gaze]],
     ) -> None:
-        """Initialize VideoMaker with source video, timestamps, calibration, and gaze data."""
+        """Initialize VideoMaker with source video, timestamps, calibration, and gaze data.
+
+        Each argument can be either a file path or a pre-loaded object.
+
+        Args:
+            output_path: Output video file or directory.
+            video_file: Path to the source scene video.
+            frame_timestamp_file: Frame timestamps file or object.
+            camera_calibration_file: Camera calibration file or object.
+            gaze_data_file: Gaze data file or pre-loaded dict keyed by
+                frame index.
+
+        """
         self.src_video = pathlib.Path(video_file)
         self.output_path = pathlib.Path(output_path)
         if self.output_path.is_dir():
@@ -94,7 +106,14 @@ class VideoMaker:
     def set_vid_pos_look(
         self, color: tuple[int, int, int] | None = None, radius: int | None = None, thickness: int | None = None
     ) -> None:
-        """Configure the appearance of video-frame gaze position markers."""
+        """Configure the appearance of video-frame gaze position markers.
+
+        Args:
+            color: RGB color tuple (converted to BGR internally).
+            radius: Circle radius in pixels.
+            thickness: Circle thickness (negative for filled).
+
+        """
         if color is not None:
             # provided colors are in RGB, internally we store as BGR
             self.vid_pos_color = color[::-1]
@@ -106,7 +125,14 @@ class VideoMaker:
     def set_world_pos_look(
         self, color: tuple[int, int, int] | None = None, radius: int | None = None, thickness: int | None = None
     ) -> None:
-        """Configure the appearance of world-referenced gaze position markers."""
+        """Configure the appearance of world-referenced gaze position markers.
+
+        Args:
+            color: RGB color tuple (converted to BGR internally).
+            radius: Circle radius in pixels.
+            thickness: Circle thickness (negative for filled).
+
+        """
         if color is not None:
             # provided colors are in RGB, internally we store as BGR
             self.world_pos_color = color[::-1]
@@ -140,7 +166,12 @@ class VideoMaker:
         return self._cache
 
     def process_one_frame(self) -> Status:
-        """Read, annotate, and encode a single video frame."""
+        """Read, annotate, and encode a single video frame.
+
+        Returns:
+            Processing status: ``Ok``, ``Skip``, or ``Finished``.
+
+        """
         status, (frame, frame_idx, _frame_ts) = self._read_frame()
         if status == Status.Finished:
             return status
