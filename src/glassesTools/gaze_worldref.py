@@ -1,4 +1,20 @@
-"""World-referenced gaze data: projection from head-ref to plane, I/O, and drawing."""
+"""World-referenced gaze data: projection from head-ref to plane, I/O, and drawing.
+
+"World-referenced" means gaze has been projected from the scene camera's
+coordinate frame onto a reference plane in the world (e.g. a validation
+poster or screen). Each gaze sample stores coordinates in two spaces:
+
+- **Camera space** (3D): the point on the plane where the gaze intersects,
+  expressed in the camera's coordinate frame (``gazePosCam*`` fields).
+- **Plane space** (2D): the same intersection point in the plane's own 2D
+  coordinate system (``gazePosPlane2D*`` fields).
+
+Multiple projection methods are used depending on available data:
+``_vidPos_ray`` (ray-plane intersection, requires camera intrinsics + pose),
+``_vidPos_homography`` (homography, requires only marker detection),
+``World`` (from the 3D world gaze point), ``Left``/``Right`` (from per-eye
+gaze direction vectors).
+"""
 
 import enum
 import math
@@ -13,7 +29,13 @@ from . import data_files, drawing, gaze_headref, json, ocv, plane, pose, transfo
 
 
 class Type(utils.AutoName):
-    """Source of a world-referenced gaze point."""
+    """Source of a world-referenced gaze point.
+
+    Each member identifies which gaze signal was used to compute the
+    world-referenced position. ``Average_Gaze_Vector`` is computed on
+    the fly as the midpoint of left and right eye gaze.
+
+    """
 
     Scene_Video_Position = enum.auto()
     World_3D_Point = enum.auto()
@@ -30,9 +52,13 @@ json.register_type(
 
 
 class Gaze:
-    """A single world-referenced gaze sample with camera-space and plane-space coordinates.
+    """A single world-referenced gaze sample.
 
-    Class attributes describe the TSV columns used for storage.
+    Stores the result of projecting head-referenced gaze onto a reference
+    plane. Each projection method produces a pair of coordinates: a 3D point
+    in camera space (``gazePosCam*``) and a 2D point in plane space
+    (``gazePosPlane2D*``). Class attributes define the TSV schema.
+
     """
 
     _columns_compressed: ClassVar[dict[str, int]] = {
@@ -81,39 +107,58 @@ class Gaze:
         gazePosPlane2DLeft: np.ndarray | None = None,
         gazePosPlane2DRight: np.ndarray | None = None,
     ) -> None:
-        """Initialize a world-referenced gaze sample."""
+        """Create a world-referenced gaze sample.
+
+        Most fields are None until populated by ``from_head`` / ``_from_head_impl``.
+
+        """
         self.timestamp = timestamp
         self.frame_idx = frame_idx
 
-        # optional timestamps and frame_idxs
-        self.timestamp_ori = timestamp_ori  # timestamp field can be set to any of these three. Keep here a copy of the original timestamp
+        # Original values preserved before clock substitution
+        self.timestamp_ori = timestamp_ori
         self.frame_idx_ori = frame_idx_ori
+        # Alternative clock sources for multi-recording synchronization
         self.timestamp_VOR = timestamp_VOR
         self.frame_idx_VOR = frame_idx_VOR
         self.timestamp_ref = timestamp_ref
-        self.frame_idx_ref = frame_idx_ref  # frameidx _in reference video_ not in this eye tracker's video (unless this is the reference)
+        self.frame_idx_ref = frame_idx_ref
 
-        # in camera space (3D coordinates)
-        self.gazePosCam_vidPos_ray = (
-            gazePosCam_vidPos_ray  # video gaze position on plane (camera ray intersected with plane)
-        )
-        self.gazePosCam_vidPos_homography = gazePosCam_vidPos_homography  # gaze2DHomography in camera space
-        self.gazePosCamWorld = gazePosCamWorld  # 3D gaze point on plane (world-space gaze point, turned into direction ray and intersected with plane)
+        # --- Camera space (3D): gaze-plane intersection in camera coords ---
+        # From video gaze position, projected via ray-plane intersection
+        self.gazePosCam_vidPos_ray = gazePosCam_vidPos_ray
+        # From video gaze position, projected via homography
+        self.gazePosCam_vidPos_homography = gazePosCam_vidPos_homography
+        # From 3D world gaze point (often binocular), intersected with plane
+        self.gazePosCamWorld = gazePosCamWorld
+        # Per-eye gaze origins and plane intersections
         self.gazeOriCamLeft = gazeOriCamLeft
-        self.gazePosCamLeft = gazePosCamLeft  # 3D gaze point on plane ( left eye gaze vector intersected with plane)
+        self.gazePosCamLeft = gazePosCamLeft
         self.gazeOriCamRight = gazeOriCamRight
-        self.gazePosCamRight = gazePosCamRight  # 3D gaze point on plane (right eye gaze vector intersected with plane)
+        self.gazePosCamRight = gazePosCamRight
 
-        # in plane space (2D coordinates)
-        self.gazePosPlane2D_vidPos_ray = gazePosPlane2D_vidPos_ray  # Video gaze point mapped to plane by turning into direction ray and intersecting with plane
-        self.gazePosPlane2D_vidPos_homography = gazePosPlane2D_vidPos_homography  # Video gaze point directly mapped to plane through homography transformation
-        self.gazePosPlane2DWorld = gazePosPlane2DWorld  # gazePosCamWorld in plane space
-        self.gazePosPlane2DLeft = gazePosPlane2DLeft  # gazePosCamLeft in plane space
-        self.gazePosPlane2DRight = gazePosPlane2DRight  # gazePosCamRight in plane space
+        # --- Plane space (2D): same intersections in the plane's own coords ---
+        self.gazePosPlane2D_vidPos_ray = gazePosPlane2D_vidPos_ray
+        self.gazePosPlane2D_vidPos_homography = gazePosPlane2D_vidPos_homography
+        self.gazePosPlane2DWorld = gazePosPlane2DWorld
+        self.gazePosPlane2DLeft = gazePosPlane2DLeft
+        self.gazePosPlane2DRight = gazePosPlane2DRight
 
     def get_gaze_point(self, gaze_type: Type, reference_frame: str = "plane") -> np.ndarray | None:
-        """Return the gaze point for the given type and reference frame."""
-        return_3d = reference_frame in {"world", "camera"}  # in all other cases return gaze on plane
+        """Return the gaze point for the given type and reference frame.
+
+        Args:
+            gaze_type: Which gaze signal to retrieve.
+            reference_frame: ``"plane"`` for 2D plane coords,
+                ``"world"`` or ``"camera"`` for 3D camera-space coords.
+
+        Returns:
+            Gaze position array, or None if unavailable. For
+            ``Average_Gaze_Vector``, computes the midpoint of left/right.
+
+        """
+        # "world"/"camera" → return 3D camera-space coords; anything else → 2D plane coords
+        return_3d = reference_frame in {"world", "camera"}
         match gaze_type:
             case Type.Scene_Video_Position:
                 gaze_point = self.gazePosCam_vidPos_ray if return_3d else self.gazePosPlane2D_vidPos_ray
@@ -152,9 +197,25 @@ class Gaze:
         clr_right: tuple[int, int, int] = (255, 0, 0),
         clr_average: tuple[int, int, int] = (255, 0, 255),
     ) -> None:
-        """Draw all available gaze points projected onto the world video frame."""
+        """Draw all available gaze points projected onto the world video frame.
 
-        # project to camera, display
+        Projects camera-space gaze coordinates back to image pixels and
+        draws colored circles for each gaze source. Falls back to
+        homography-only rendering if camera intrinsics are unavailable.
+
+        Args:
+            img: Image to draw on (modified in place).
+            camera_params: Camera intrinsics/extrinsics for 3D→2D projection.
+            sub_pixel_fac: Sub-pixel rendering factor.
+            pose: Camera pose, needed for homography fallback path.
+            clr_vidPos: BGR color for video-position gaze point.
+            clr_world_pos: BGR color for 3D world gaze point.
+            clr_left: BGR color for left eye gaze.
+            clr_right: BGR color for right eye gaze.
+            clr_average: BGR color for left/right average.
+
+        """
+
         def _project(pos: np.ndarray) -> np.ndarray:
             return transforms.project_points(pos.reshape(1, 3), camera_params).flatten()
 
@@ -197,7 +258,17 @@ class Gaze:
             project_and_draw(img, point_cam, 6, clr_average)
 
     def draw_on_plane(self, img: np.ndarray, reference: plane.Plane, sub_pixel_fac: int = 1) -> None:
-        """Draw all available gaze points on a plane image."""
+        """Draw all available gaze points on a plane image.
+
+        Uses plane-space 2D coordinates and the plane's own ``draw`` method
+        to render each gaze source with a distinct color.
+
+        Args:
+            img: Plane image to draw on (modified in place).
+            reference: The reference plane (provides coordinate mapping).
+            sub_pixel_fac: Sub-pixel rendering factor.
+
+        """
         # binocular gaze point
         if self.gazePosPlane2DWorld is not None:
             reference.draw(img, *self.gazePosPlane2DWorld, sub_pixel_fac, (0, 255, 255), 3)
@@ -220,7 +291,17 @@ class Gaze:
 def read_dict_from_file(
     file_name: str | pathlib.Path, episodes: list[list[int]] | None = None, ts_column_suffixes: list[str] | None = None
 ) -> dict[int, list[Gaze]]:
-    """Read world-referenced gaze data from a TSV file into a dict keyed by frame index."""
+    """Read world-referenced gaze data from a TSV file.
+
+    Args:
+        file_name: Path to the world-gaze TSV file.
+        episodes: Optional ``[[start, end], ...]`` frame ranges to keep.
+        ts_column_suffixes: Preferred timestamp column suffixes, in order.
+
+    Returns:
+        Dict mapping frame index to list of ``Gaze`` samples.
+
+    """
     return data_files.read_file(
         file_name, Gaze, False, False, True, True, episodes=episodes, ts_fridx_field_suffixes=ts_column_suffixes
     )[0]
@@ -229,7 +310,14 @@ def read_dict_from_file(
 def write_dict_to_file(
     gazes: list[Gaze] | dict[int, list[Gaze]], file_name: str | pathlib.Path, skip_missing: bool = False
 ) -> None:
-    """Write world-referenced gaze data to a TSV file."""
+    """Write world-referenced gaze data to a TSV file.
+
+    Args:
+        gazes: Gaze samples as a flat list or dict keyed by frame index.
+        file_name: Output TSV file path.
+        skip_missing: If True, drop rows where all gaze vectors are NaN.
+
+    """
     data_files.write_array_to_file(
         gazes, file_name, Gaze._columns_compressed, Gaze._columns_optional, skip_all_nan=skip_missing
     )
@@ -252,7 +340,21 @@ def from_head(
     camera_params: ocv.CameraParams,
     progress_updater: typing.Callable[[], None] | None = None,
 ) -> Gaze | dict[int, list[Gaze]]:
-    """Project head-referenced gaze data to world coordinates using camera poses."""
+    """Project head-referenced gaze onto a reference plane using camera poses.
+
+    Dispatches to ``_from_head_impl`` for each (pose, gaze) pair. Accepts
+    either a single sample or a dict of samples keyed by frame index.
+
+    Args:
+        poses: Camera pose(s) defining the plane's position.
+        gazes: Head-referenced gaze sample(s) to project.
+        camera_params: Camera intrinsics and extrinsics.
+        progress_updater: Optional callback invoked after each sample.
+
+    Returns:
+        Projected world-referenced ``Gaze`` sample(s).
+
+    """
     if not isinstance(poses, dict):
         return _from_head_impl(poses, gazes, camera_params)
 
@@ -269,6 +371,22 @@ def from_head(
 
 
 def _from_head_impl(pose: pose.Pose, gaze: gaze_headref.Gaze, camera_params: ocv.CameraParams) -> Gaze:
+    """Project a single head-referenced gaze sample to world coordinates.
+
+    Performs coordinate transforms through three spaces:
+    1. **Eye tracker space** → **camera space** via rotation + translation
+    2. **Camera space** → **plane intersection** via ray-plane intersection
+    3. **Camera space** → **plane space** via ``cam_frame_to_world``
+
+    Args:
+        pose: Camera pose defining the reference plane orientation.
+        gaze: Head-referenced gaze sample to project.
+        camera_params: Camera intrinsics and ET-to-camera extrinsics.
+
+    Returns:
+        A new ``Gaze`` with all computable fields populated.
+
+    """
     gaze_world = Gaze(
         gaze.timestamp,
         gaze.frame_idx,
@@ -354,7 +472,19 @@ def _from_head_impl(pose: pose.Pose, gaze: gaze_headref.Gaze, camera_params: ocv
 
 
 def distance_from_plane(gaze: Gaze, plane: plane.Plane) -> float:
-    """Return the distance of the gaze point from the plane bounding box, or NaN."""
+    """Return the distance of the gaze point from the plane bounding box.
+
+    Prefers the ray-intersection gaze point, falls back to homography.
+
+    Args:
+        gaze: World-referenced gaze sample.
+        plane: Reference plane with bounding box.
+
+    Returns:
+        Distance to the nearest edge of the bounding box, or NaN if no
+        valid gaze point is available.
+
+    """
     if gaze.gazePosPlane2D_vidPos_ray is not None and not math.isnan(gaze.gazePosPlane2D_vidPos_ray[0]):
         gp = gaze.gazePosPlane2D_vidPos_ray
     elif gaze.gazePosPlane2D_vidPos_homography is not None and not math.isnan(

@@ -1,4 +1,12 @@
-"""Fixation classification using I2MC on plane-projected gaze data."""
+"""Fixation classification using I2MC on plane-projected gaze data.
+
+Runs the I2MC (Identification by Two-Means Clustering) algorithm on
+world-referenced gaze that has been projected onto a reference plane.
+When per-eye signals are available, I2MC uses those for better robustness,
+but fixation positions are recalculated using the ray or homography gaze
+signal — which matches the visualization and is more reliable for some
+devices.
+"""
 
 import math
 import pathlib
@@ -21,7 +29,25 @@ def from_plane_gaze(
     do_plot: bool = True,
     plot_limits: list[list[float]] | None = None,
 ) -> None:
-    """Run I2MC fixation classification on gaze data projected to a plane."""
+    """Run I2MC fixation classification on gaze data projected to a plane.
+
+    Processes each classification interval independently, writing per-interval
+    TSV results and optional diagnostic plots.
+
+    Args:
+        gazes: World-referenced gaze samples, or path to a TSV file.
+        classification_intervals: ``[[start, end], ...]`` frame ranges.
+            Use ``end=-1`` for "until end of recording".
+        output_directory: Directory for output TSV and plot files.
+        I2MC_settings_override: Optional dict to override I2MC parameters.
+        filename_stem: Prefix for output filenames.
+        do_plot: Whether to generate diagnostic plots.
+        plot_limits: Axis limits for plots (``[[xmin, xmax], [ymin, ymax]]``).
+
+    Raises:
+        RuntimeError: If no gaze data channels are available.
+
+    """
     output_directory = pathlib.Path(output_directory)
 
     # read input if needed
@@ -38,15 +64,14 @@ def from_plane_gaze(
     opt["maxMergeTime"] = 81  # ms
     opt["minFixDur"] = 50  # ms
 
-    # decide what sampling frequency to tell I2MC about. It doesn't work with varying sampling frequency, nor
-    # any random sampling frequency. For our purposes, getting it right is not important (internally I2MC only
-    # uses sampling frequency for converting some of the time units to samples, other things are taken directly
-    # from the time signal). So, we have working I2MC settings for a few sampling frequencies, and just choose
-    # the nearest based on empirically determined sampling frequency.
+    # I2MC requires a fixed sampling frequency, but eye trackers have varying
+    # rates. The exact value doesn't matter much (I2MC mainly uses it to convert
+    # time-based parameters to samples). Snap to the nearest known frequency
+    # for which we have tested I2MC filter settings.
     ts = np.array([s.timestamp for v in gazes.values() for s in v])
     ts_diff = np.diff(ts)
-    ts_diff = ts_diff[ts_diff > 0]
-    rec_freq = np.round(np.mean(1000.0 / ts_diff))  # Hz
+    ts_diff = ts_diff[ts_diff > 0]  # drop zero/negative gaps (duplicate timestamps)
+    rec_freq = np.round(np.mean(1000.0 / ts_diff))  # empirical Hz
     known_freqs = [30.0, 50.0, 60.0, 90.0, 120.0, 200.0]
     opt["freq"] = known_freqs[np.abs(known_freqs - rec_freq).argmin()]
     if opt["freq"] == 200.0:
@@ -68,7 +93,7 @@ def from_plane_gaze(
             if I2MC_settings_override[k] is not None:
                 opt[k] = I2MC_settings_override[k]
 
-    # collect data
+    # Probe which gaze channels have any non-NaN data across the whole recording
     has_left = np.any(np.logical_not(np.isnan([s.gazePosPlane2DLeft for v in gazes.values() for s in v])))
     has_right = np.any(np.logical_not(np.isnan([s.gazePosPlane2DRight for v in gazes.values() for s in v])))
     has_ray = np.any(np.logical_not(np.isnan([s.gazePosPlane2D_vidPos_ray for v in gazes.values() for s in v])))
@@ -95,7 +120,8 @@ def from_plane_gaze(
         data["time"] = np.array([s.timestamp for v in gazes_to_classify.values() for s in v])
         need_recalc_fix = False
         if has_left and has_right:
-            # prefer using separate left and right eye signals, if available. Better I2MC robustness
+            # Per-eye signals give I2MC better robustness for classification,
+            # but fixation positions need recalculating with ray/homography data
             data["L_X"] = np.array([s.gazePosPlane2DLeft[0] for v in gazes_to_classify.values() for s in v])
             data["L_Y"] = np.array([s.gazePosPlane2DLeft[1] for v in gazes_to_classify.values() for s in v])
             data["R_X"] = np.array([s.gazePosPlane2DRight[0] for v in gazes_to_classify.values() for s in v])
@@ -113,8 +139,9 @@ def from_plane_gaze(
         # run event classification to find fixations
         fixations, data_i2mc, par_i2mc = I2MC.I2MC(data, opt, False)
 
-        # replace gaze data used for classification with gaze position on scene video
-        # see note above for why
+        # When per-eye data was used for classification, replace it with the
+        # ray/homography signal and recalculate fixation positions — per-eye
+        # world coordinates can be inaccurate for some devices
         if need_recalc_fix:
             data_i2mc = data_i2mc.drop(columns=["L_X", "L_Y", "R_X", "R_Y"], errors="ignore")
             data_i2mc["average_X"] = ray_x if has_ray else homography_x

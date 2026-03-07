@@ -1,4 +1,9 @@
-"""Eye tracker device enumeration and JSON serialization."""
+"""Eye tracker device enumeration and JSON serialization.
+
+Each ``EyeTracker`` member carries a ``.color`` attribute (RGBA, 0-1 range) for
+consistent UI display across tools. Colors are from a colorblind-friendly
+palette (Green-Armytage, 2010).
+"""
 
 import enum
 
@@ -6,7 +11,13 @@ from . import json, utils
 
 
 class EyeTracker(utils.AutoName):
-    """Supported wearable eye tracker devices."""
+    """Supported wearable eye tracker devices.
+
+    Uses ``AutoName`` so each member's value equals its name string.
+    A ``.color`` attribute (RGBA 0-1 tuple) is attached to each member
+    after class creation for UI rendering.
+
+    """
 
     AdHawk_MindLink = enum.auto()
     Argus_ETVision = enum.auto()
@@ -26,6 +37,8 @@ class EyeTracker(utils.AutoName):
 
 eye_tracker_names = [x.value for x in EyeTracker if x != EyeTracker.Unknown]
 
+# Colors assigned post-creation because enums don't support extra
+# attributes in their member definitions
 EyeTracker.AdHawk_MindLink.color = utils.hex_to_rgba_0_1("#F0A3FF")
 EyeTracker.Argus_ETVision.color = utils.hex_to_rgba_0_1("#C20088")
 EyeTracker.Generic.color = utils.hex_to_rgba_0_1("#393939")
@@ -46,11 +59,26 @@ EyeTracker.Unknown.color = utils.hex_to_rgba_0_1("#393939")
 
 
 def string_to_enum(device: str | EyeTracker) -> EyeTracker:
-    """Convert a string or EyeTracker instance to an EyeTracker enum member."""
+    """Convert a string or ``EyeTracker`` instance to an ``EyeTracker`` enum member.
+
+    Accepts member names (``"Tobii_Glasses_3"``), member values (same for
+    ``AutoName`` enums), or existing enum instances (returned as-is).
+
+    Args:
+        device: Member name/value string, or an existing ``EyeTracker``.
+
+    Returns:
+        The matching ``EyeTracker`` member.
+
+    Raises:
+        ValueError: If *device* is not a recognized eye tracker.
+
+    """
     if isinstance(device, EyeTracker):
         return device
 
     if isinstance(device, str):
+        # Try as member name first (attribute lookup), then as value
         if hasattr(EyeTracker, device):
             return getattr(EyeTracker, device)
         if device in [e.value for e in EyeTracker]:
@@ -63,6 +91,7 @@ def string_to_enum(device: str | EyeTracker) -> EyeTracker:
     )
 
 
+# Serialized as "EyeTracker.MemberName"; deserializer splits on "." to recover the member
 json.register_type(
     json.TypeEntry(
         EyeTracker, "__enum.EyeTracker__", utils.enum_val_2_str, lambda x: getattr(EyeTracker, x.split(".")[1])
