@@ -8,7 +8,25 @@ from ... import aruco
 
 
 def deploy_config(output_dir: str | pathlib.Path, overwrite: bool = False) -> list[str]:
-    """Copy default validation config files to output_dir."""
+    """Copy default validation config files to output_dir.
+
+    Copies ``markerPositions.csv``, ``targetPositions.csv``, and
+    ``validationSetup.txt`` from the bundled package, then calls
+    :func:`deploy_maker` to also set up the poster TeX file and marker
+    images.
+
+    Args:
+        output_dir: Directory to copy config files into.
+        overwrite: If True, overwrite existing files.
+
+    Returns:
+        List of filenames that were NOT copied (already existed and
+        ``overwrite`` is False).
+
+    Raises:
+        RuntimeError: If ``output_dir`` does not exist.
+
+    """
     output_dir = pathlib.Path(output_dir)
     if not output_dir.is_dir():
         raise RuntimeError(f'the requested directory "{output_dir}" does not exist')
@@ -28,7 +46,20 @@ def deploy_config(output_dir: str | pathlib.Path, overwrite: bool = False) -> li
 
 
 def deploy_maker(output_dir: str | pathlib.Path, overwrite: bool = False) -> list[str]:
-    """Copy the poster TeX file and generate marker images to output_dir."""
+    """Copy the poster TeX file and generate marker images to output_dir.
+
+    Args:
+        output_dir: Directory to copy files into.
+        overwrite: If True, overwrite existing files.
+
+    Returns:
+        List of filenames that were NOT copied (already existed and
+        ``overwrite`` is False). Marker images are always regenerated.
+
+    Raises:
+        RuntimeError: If ``output_dir`` does not exist.
+
+    """
     output_dir = pathlib.Path(output_dir)
     if not output_dir.is_dir():
         raise RuntimeError(f'the requested directory "{output_dir}" does not exist')
@@ -48,7 +79,17 @@ def deploy_maker(output_dir: str | pathlib.Path, overwrite: bool = False) -> lis
 
 
 def deploy_marker_images(output_dir: str | pathlib.Path) -> None:
-    """Generate and store ArUco marker images for the default validation poster."""
+    """Generate and store ArUco marker images for the default validation poster.
+
+    Creates an ``all-markers`` subdirectory inside ``output_dir`` and
+    writes 1000 px marker images using the default validation setup's
+    ArUco dictionary and border settings.
+
+    Args:
+        output_dir: Parent directory where the ``all-markers`` folder
+            will be created.
+
+    """
     from ..config import get_validation_setup
 
     output_dir = pathlib.Path(output_dir) / "all-markers"
@@ -65,7 +106,15 @@ def deploy_marker_images(output_dir: str | pathlib.Path) -> None:
 
 
 def deploy_default_pdf(output_file_or_dir: str | pathlib.Path) -> None:
-    """Copy the default poster PDF to the specified file or directory."""
+    """Copy the default poster PDF to the specified file or directory.
+
+    If ``output_file_or_dir`` is a directory, the PDF is written as
+    ``poster.pdf`` inside it.
+
+    Args:
+        output_file_or_dir: Destination file path or directory.
+
+    """
     output_file_or_dir = pathlib.Path(output_file_or_dir)
     if output_file_or_dir.is_dir():
         output_file_or_dir /= "poster.pdf"

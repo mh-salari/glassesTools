@@ -12,7 +12,26 @@ def collect_data_quality(
     file_name: str | dict[str, str] = "dataQuality.tsv",
     col_for_parent: str | None = None,
 ) -> tuple[pd.DataFrame | None, data_types.DataType | None, list[int] | None]:
-    """Collect data quality metrics from recording directories into a single DataFrame."""
+    """Collect data quality metrics from recording directories into a single DataFrame.
+
+    Reads ``dataQuality.tsv`` (or a dict of per-plane filenames) from
+    each recording directory, concatenates them, converts the ``type``
+    index level to :class:`~glassesTools.data_types.DataType` enum
+    values, and selects a default data quality type for export.
+
+    Args:
+        rec_dirs: List of recording directory paths to scan.
+        file_name: Either a single TSV filename or a dict mapping plane
+            names to filenames.
+        col_for_parent: If set, adds a column with this name containing
+            the parent directory name of each recording.
+
+    Returns:
+        A tuple of (concatenated DataFrame, default DataType for export,
+        list of target IDs), or ``(None, None, None)`` if no files were
+        found or the result is empty.
+
+    """
     rec_files: list = []
     idx_vals = ["recording"]
     if isinstance(file_name, dict):
@@ -68,7 +87,22 @@ def summarize_and_store_data_quality(
     average_over_targets: bool = False,
     include_data_loss: bool = False,
 ) -> None:
-    """Filter, optionally average, and write data quality metrics to TSV."""
+    """Filter, optionally average, and write data quality metrics to TSV.
+
+    Removes unwanted data types and targets from the DataFrame,
+    optionally averages metrics across targets (adding a
+    ``num_targets`` count column), and writes the result to a TSV file.
+
+    Args:
+        df: Multi-indexed DataFrame from :func:`collect_data_quality`.
+        output_file_or_dir: Output TSV path or directory (defaults to
+            ``dataQuality.tsv`` if a directory).
+        dq_types: Data quality types to keep.
+        targets: Target IDs to keep.
+        average_over_targets: If True, average metrics across targets.
+        include_data_loss: If True, keep the ``data_loss`` column.
+
+    """
     dq_types_have = sorted(df.index.levels[df.index.names.index("type")], key=lambda dq: dq.value)
     targets_have = list(df.index.levels[df.index.names.index("target")])
 
@@ -106,7 +140,21 @@ def export_data_quality(
     average_over_targets: bool = False,
     include_data_loss: bool = False,
 ) -> None:
-    """Collect, summarize, and export data quality metrics from recording directories."""
+    """Collect, summarize, and export data quality metrics from recording directories.
+
+    Convenience wrapper that calls :func:`collect_data_quality` and
+    :func:`summarize_and_store_data_quality`.
+
+    Args:
+        rec_dirs: List of recording directory paths.
+        output_file_or_dir: Output TSV path or directory.
+        dq_types: Data quality types to export. If None, uses the
+            default from :func:`collect_data_quality`.
+        targets: Target IDs to include. If None, includes all.
+        average_over_targets: If True, average metrics across targets.
+        include_data_loss: If True, include ``data_loss`` in output.
+
+    """
     df, default_dq_type, targets_have = collect_data_quality(rec_dirs)
     if not dq_types:
         dq_types = [default_dq_type]
@@ -120,7 +168,19 @@ def export_data_quality(
 def export_et_sync(
     rec_dirs: list[str | pathlib.Path], in_file_name: str, output_file_or_dir: str | pathlib.Path
 ) -> None:
-    """Collect and export eye tracker synchronization data from recording directories."""
+    """Collect and export eye tracker synchronization data from recording directories.
+
+    Reads per-recording sync TSV files, concatenates them with
+    ``session`` and ``recording`` columns, and writes the result.
+
+    Args:
+        rec_dirs: List of recording directory paths.
+        in_file_name: Name of the sync TSV file within each recording
+            directory.
+        output_file_or_dir: Output TSV path or directory (defaults to
+            ``et_sync.tsv`` if a directory).
+
+    """
     sync_files = [
         (pathlib.Path(rec) / in_file_name, {"recording": rec.name, "session": rec.parent.name}) for rec in rec_dirs
     ]

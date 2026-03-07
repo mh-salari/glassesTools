@@ -24,7 +24,20 @@ class ABCFixPoint:
         inner_color: str = "white",
         units: str = "degFlatPos",
     ) -> None:
-        """Initialize fixation point components."""
+        """Initialize fixation point components.
+
+        Creates four overlapping shapes (outer circle, inner circle, and
+        two crossing rectangles) that form the ABC-style crosshair.
+
+        Args:
+            win: PsychoPy window to draw on.
+            outer_diameter: Diameter of the outer circle.
+            inner_diameter: Diameter of the inner circle and bar width.
+            outer_color: Fill color for the outer circle and inner dot.
+            inner_color: Fill color for the crosshair bars.
+            units: PsychoPy coordinate units.
+
+        """
         self.outer_dot = visual.Circle(win, fillColor=outer_color, radius=outer_diameter / 2, units=units)
         self.inner_dot = visual.Circle(win, fillColor=outer_color, radius=inner_diameter / 2, units=units)
         self.line_vertical = visual.Rect(
@@ -76,7 +89,18 @@ class SegmentationMarker:
         margin: float,
         background_color: str,
     ) -> None:
-        """Initialize segmentation marker display."""
+        """Initialize segmentation marker display.
+
+        Args:
+            win: PsychoPy window.
+            refresh_rate: Monitor refresh rate in Hz.
+            duration: How long to display each marker in seconds.
+            marker_size: Marker size in the given units.
+            units: PsychoPy coordinate units.
+            margin: Fractional padding around the marker image.
+            background_color: Fill color for the marker background rect.
+
+        """
         self.win = win
         self.refresh_rate = refresh_rate
         self.duration = duration
@@ -95,7 +119,12 @@ class SegmentationMarker:
         )
 
     def draw(self, m_id: int) -> None:
-        """Display the segmentation marker for the configured duration."""
+        """Display the segmentation marker for the configured duration.
+
+        Args:
+            m_id: ArUco marker ID to display.
+
+        """
         check_escape(self.win)
         self._marker.image = get_aruco_marker(m_id, self.size, self.units, self.win)
         n_segment_marker_frames = int(self.duration * self.refresh_rate)
@@ -120,7 +149,20 @@ _aruco_border_bits: int = None
 
 
 def load_aruco_dict(aruco_dict_name: str, border_bits: int) -> None:
-    """Load a predefined ArUco dictionary for marker generation."""
+    """Load a predefined ArUco dictionary for marker generation.
+
+    Must be called before :func:`get_aruco_marker`.
+
+    Args:
+        aruco_dict_name: Name of the ArUco dictionary (e.g.
+            ``"DICT_4X4_250"``).
+        border_bits: Number of border bits around each marker.
+
+    Raises:
+        ValueError: If the dictionary name is unknown or border_bits
+            is less than 1.
+
+    """
     global _aruco_dict, _aruco_border_bits
     str_to_dict: dict[str, int] = {
         k: getattr(cv2.aruco, k)
@@ -163,7 +205,22 @@ def load_aruco_dict(aruco_dict_name: str, border_bits: int) -> None:
 
 
 def get_aruco_marker(m_id: int, size: float, units: str, win: visual.Window) -> np.ndarray:
-    """Generate an ArUco marker image scaled to the given size and window."""
+    """Generate an ArUco marker image scaled to the given size and window.
+
+    Args:
+        m_id: Marker ID within the loaded dictionary.
+        size: Marker size in the given units.
+        units: PsychoPy coordinate units.
+        win: PsychoPy window (needed for unit-to-pixel conversion).
+
+    Returns:
+        A float32 numpy array with pixel values in [-1, 1], vertically
+        flipped for PsychoPy's memory-image drawing convention.
+
+    Raises:
+        RuntimeError: If :func:`load_aruco_dict` has not been called.
+
+    """
     if _aruco_dict is None or _aruco_border_bits is None:
         raise RuntimeError("You must call load_aruco_dict() before you try to load an ArUco marker")
     size = tools.monitorunittools.convertToPix(np.array([-0.5 * size, 0.5 * size]), np.array([0.0, 0.0]), units, win)
@@ -185,7 +242,26 @@ def check_escape(win: visual.Window) -> None:
 
 
 def prepare_validation(win: visual.Window, config: dict, _screen_config: dict) -> dict:
-    """Create background with ArUco markers and target placeholders."""
+    """Create background with ArUco markers and target placeholders.
+
+    Draws fiducial ArUco markers and optional target placeholder circles
+    onto the window, then captures a screenshot as a single
+    ``ImageStim`` for efficient redrawing.
+
+    Args:
+        win: PsychoPy window.
+        config: The ``validation`` section of the setup config.
+        _screen_config: Unused screen config (kept for interface
+            compatibility).
+
+    Returns:
+        A dict with ``background`` (ImageStim), ``target_positions``
+        (DataFrame), and ``fiducial_positions`` (DataFrame).
+
+    Raises:
+        ValueError: If indicator marker IDs overlap with fiducial IDs.
+
+    """
     # get markers and target positions
     target_positions = read_coord_file(config["targets"]["file"])
     fiducial_positions = read_coord_file(config["markers"]["file"])
@@ -249,7 +325,26 @@ def prepare_validation(win: visual.Window, config: dict, _screen_config: dict) -
 def show_validation(
     win: visual.Window, config: dict, refresh_rate: int, task_vars: dict, last_pos: np.ndarray | None = None
 ) -> np.ndarray:
-    """Animate fixation targets and indicator markers for one validation pass."""
+    """Animate fixation targets and indicator markers for one validation pass.
+
+    Moves a fixation target through each target position in randomized
+    order (starting with ``first_ID``), shrinks it, then holds for a
+    capture period while displaying indicator ArUco markers at the
+    fiducial positions.
+
+    Args:
+        win: PsychoPy window.
+        config: The ``validation`` section of the setup config.
+        refresh_rate: Monitor refresh rate in Hz.
+        task_vars: Dict from :func:`prepare_validation` with
+            ``background``, ``target_positions``, and
+            ``fiducial_positions``.
+        last_pos: Starting position from a previous pass, or None.
+
+    Returns:
+        The last target position visited (for chaining passes).
+
+    """
     # prepare visual objects
     fixation_target = ABCFixPoint(
         win,
@@ -366,7 +461,17 @@ def show_validation(
 
 
 def run_validation(win: visual.Window, config: dict) -> None:
-    """Run the full dynamic validation sequence."""
+    """Run the full dynamic validation sequence.
+
+    Displays instructions, prepares the validation background, runs
+    one or more repetitions (with segmentation markers between them),
+    and handles start/end signaling.
+
+    Args:
+        win: PsychoPy window.
+        config: The full setup config dict.
+
+    """
     # prepare fiducials
     load_aruco_dict(config["aruco"]["dict"], config["aruco"]["border_bits"])
 

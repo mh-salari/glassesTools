@@ -15,7 +15,30 @@ def distance(
     do_global_shift: bool = True,
     max_dist_fac: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame | None]:
-    """Assign fixation intervals to targets based on spatial distance."""
+    """Assign fixation intervals to targets based on spatial distance.
+
+    For each target, finds the nearest unused fixation that exceeds a
+    minimum duration. A global shift can be applied to center fixations
+    and targets before matching, improving robustness when gaze data has
+    an overall offset. Fixations farther than ``max_dist_fac`` times the
+    nearest inter-target distance are rejected.
+
+    Args:
+        targets: Mapping of target ID to position array ``[x, y]``.
+        fixations: Either a DataFrame or path to a TSV file with columns
+            ``xpos``, ``ypos``, ``dur``, ``start``, ``startT``, ``endT``.
+        do_global_shift: If True, center fixations and targets by
+            removing the median fixation offset and mean target offset
+            before distance computation.
+        max_dist_fac: Maximum allowed distance to a target, expressed as
+            a fraction of the smallest inter-target distance.
+
+    Returns:
+        A tuple of (selected intervals DataFrame indexed by target ID,
+        unselected intervals DataFrame or None if all fixations were
+        assigned).
+
+    """
     # read input if needed
     if not isinstance(fixations, pd.DataFrame):
         fixations = pd.read_csv(fixations, sep="\t", index_col=False)
@@ -39,9 +62,7 @@ def distance(
         off_t_x = t_x.mean()
         off_t_y = t_y.mean()
 
-    # we furthermore do not assign a fixation to a target if the closest fixation is more than
-    # max_dist_fac the intertarget distance away
-    # determine intertarget distance, if possible
+    # reject fixations farther than max_dist_fac * intertarget distance
     dist_lim = np.inf
     if len(t_x) > 1:
         # arbitrarily take first target and find closest target to it
@@ -88,8 +109,44 @@ def dynamic_markers(
     name: str = "",
     allow_missing: bool = False,
 ) -> tuple[pd.DataFrame, None]:
-    """Assign intervals to targets using dynamic marker appearance signals."""
-    # also need frame timestamps because the intervals returned by this function should be expressed in recording time, not as frame indices.
+    """Assign intervals to targets using dynamic marker appearance signals.
+
+    Each target is associated with one or more ArUco markers. This
+    function examines marker detection data within the given episode,
+    fills gaps in the detection signal, finds contiguous appearance
+    windows, and selects the longest window for each target. The
+    resulting intervals are expressed in recording timestamps (not
+    frame indices).
+
+    Args:
+        marker_observations_per_target: Mapping of target ID to a
+            DataFrame of marker detection observations.
+        markers_per_target: Mapping of target ID to a list of
+            ``MarkerID`` objects associated with that target.
+        timestamps_file: Path to the frame timestamps TSV file used to
+            convert frame indices to recording timestamps.
+        episode: Two-element list ``[start_frame, end_frame]`` defining
+            the episode to process.
+        skip_first_duration: Time in ms to skip at the start of each
+            detected appearance window (allowing fixation to settle).
+        max_gap_duration: Maximum gap in frames between detections that
+            is still treated as a single contiguous appearance.
+        min_duration: Minimum duration in frames for an appearance
+            window to be accepted.
+        name: Optional episode name used in error messages.
+        allow_missing: If True, silently skip targets with no marker
+            observations instead of raising an error.
+
+    Returns:
+        A tuple of (selected intervals DataFrame indexed by target ID
+        with ``startT`` and ``endT`` columns, None).
+
+    Raises:
+        RuntimeError: If no markers for a target were observed during
+            the episode and ``allow_missing`` is False.
+
+    """
+    # frame timestamps are needed because the returned intervals should be in recording time, not frame indices
     timestamps = pd.read_csv(timestamps_file, delimiter="\t", index_col="frame_idx")
     ts_col = "timestamp_stretched" if "timestamp_stretched" in timestamps else "timestamp"
 
@@ -110,7 +167,7 @@ def dynamic_markers(
                 f"None of the markers for target {t} were observed during the episode {extra}:\n- {missing_str}"
             )
 
-    # marker presence signal only contains marker detections (True). We need to fill the gaps in between detections with False (not detected) so we have a continuous signal without gaps
+    # fill gaps between detections with False to get a continuous presence signal
     marker_observations_per_target = {
         t: marker.expand_detection(marker_observations_per_target[t], fill_value=False)
         for t in marker_observations_per_target
@@ -149,7 +206,32 @@ def plot(
     background_image: tuple[np.ndarray, list[float]] | None = None,  # (image, extent in mm [l r t b])
     plot_limits: list[list[float]] | None = None,
 ) -> None:
-    """Plot fixation-to-target assignment overlaid on the poster image."""
+    """Plot fixation-to-target assignment overlaid on the poster image.
+
+    Draws all fixation intervals as a connected path, then overlays red
+    lines from each assigned fixation to its matched target. If the
+    intervals lack ``xpos``/``ypos`` columns, gaze positions are computed
+    from the raw gaze data within each interval's time range.
+
+    Args:
+        selected_intervals: DataFrame of assigned intervals, indexed by
+            target ID with ``startT``, ``endT``, and optionally ``xpos``
+            and ``ypos`` columns.
+        other_intervals: DataFrame of unassigned intervals (same
+            columns), or None.
+        targets: Mapping of target ID to position array ``[x, y]``.
+        gazes: Either a dict of frame-indexed gaze samples or a path to
+            a gaze data file.
+        episode: Two-element list ``[start_frame, end_frame]``.
+        output_directory: Directory where the plot PNG will be saved.
+        filename_stem: Prefix for the output filename.
+        iteration: Zero-based iteration index, used in the filename.
+        background_image: Tuple of (image array, extent ``[l, r, t, b]``
+            in mm) for the poster background, or None.
+        plot_limits: Optional ``[[x_min, x_max], [y_min, y_max]]`` axis
+            limits.
+
+    """
     output_directory = pathlib.Path(output_directory)
     # if we do not have x and y positions for the gaze intervals, make them
     if "xpos" not in selected_intervals.columns or (
@@ -187,8 +269,7 @@ def plot(
                 if data:
                     gaze = np.vstack(data)
                     other_intervals.loc[t, ["xpos", "ypos"]] = np.nanmedian(gaze, axis=0)
-    # make plot of data overlaid on poster, and show for each target which interval was selected
-    # prep data
+    # combine intervals for a single time-ordered path
     if other_intervals is not None:
         all_intervals = pd.concat(
             (selected_intervals.set_index("startT"), other_intervals.set_index("startT")), join="inner"
@@ -223,14 +304,30 @@ def to_tsv(
     filename_stem: str = naming.fixation_assignment_prefix,
     iteration: int = 0,
 ) -> None:
-    """Write selected intervals to a TSV file."""
+    """Write selected intervals to a TSV file.
+
+    Drops position columns (``xpos``, ``ypos``) and renames time
+    columns to ``start_timestamp`` and ``end_timestamp``. Appends to the
+    file for iterations after the first.
+
+    Args:
+        selected_intervals: DataFrame of assigned intervals indexed by
+            target ID.
+        output_directory: Directory where the TSV file will be written.
+        filename_stem: Prefix for the output filename.
+        iteration: Zero-based iteration index. The first iteration
+            writes a header; subsequent iterations append.
+
+    Raises:
+        ValueError: If the ``marker_interval`` column exists but its
+            values don't match the expected iteration number.
+
+    """
     output_directory = pathlib.Path(output_directory)
-    # store selected intervals
     selected_intervals = selected_intervals.drop(
         columns=[c for c in ("xpos", "ypos") if c in selected_intervals.columns]
     ).rename(columns={"startT": "start_timestamp", "endT": "end_timestamp"})
     if "marker_interval" in selected_intervals.columns:
-        # check matches
         if not all(selected_intervals["marker_interval"] == iteration + 1):
             raise ValueError(f"marker_interval column values do not match expected iteration {iteration + 1}")
     else:

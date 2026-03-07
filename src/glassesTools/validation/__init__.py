@@ -28,6 +28,16 @@ class Plane(_plane.TargetPlane):
         """Initialize validation plane from config directory.
 
         If config_dir is None, the default config will be used.
+
+        Args:
+            config_dir: Path to directory containing validation config files,
+                or None to use the default config.
+            validation_config: Pre-loaded validation config dict. If None,
+                loaded from config_dir.
+            is_dynamic: Whether to load dynamic marker definitions from the
+                target positions file.
+            **kwarg: Additional keyword arguments passed to ``TargetPlane``.
+
         """
         if config_dir is not None:
             config_dir = pathlib.Path(config_dir)
@@ -85,7 +95,20 @@ class Plane(_plane.TargetPlane):
         validation_setup: dict[str, typing.Any],
         is_dynamic: bool,
     ) -> tuple[pd.DataFrame, _plane.Coordinate]:
-        """Poster space: (0,0) is origin (might be center target), (-,-) bottom left."""
+        """Load target positions and optional dynamic marker mappings.
+
+        Poster space: (0,0) is origin (might be center target), (-,-)
+        bottom left.
+
+        Args:
+            config_dir: Path to validation config directory.
+            validation_setup: The validation config dict.
+            is_dynamic: Whether to extract dynamic marker columns.
+
+        Returns:
+            A tuple of (targets DataFrame scaled to mm, origin coordinate).
+
+        """
         # read in target positions
         targets = config.get_targets(config_dir, validation_setup["targetPosFile"])
         if targets is not None:
@@ -112,7 +135,13 @@ class Plane(_plane.TargetPlane):
         return targets, origin
 
     def get_marker_ids(self) -> dict[str | int, list[_marker.MarkerID]]:
-        """Return all marker IDs including dynamic markers."""
+        """Return all marker IDs including dynamic markers.
+
+        Returns:
+            A dict mapping marker group keys to lists of MarkerID objects,
+            combining the base plane markers with any dynamic markers.
+
+        """
         if self._dynamic_markers_cache is None:
             self._dynamic_markers_cache = defaultdict(list)
             # {marker ID: (target ID, marker_N column in target file)} -> {marker_N column in target file: [(marker_id, aruco_dict)]}

@@ -23,7 +23,44 @@ def compute(
     allow_data_type_fallback: bool = False,
     include_data_loss: bool = False,
 ) -> None:
-    """Compute accuracy/precision metrics for each target and write results to TSV."""
+    """Compute accuracy/precision metrics for each target and write results to TSV.
+
+    For each validation interval and target, extracts gaze samples that
+    fall within the assigned marker interval. Angular offsets between
+    gaze direction and target position are computed per sample, then
+    decomposed into horizontal and vertical components in the plane
+    coordinate system. Accuracy (median offset), precision (RMS of
+    sample-to-sample differences and STD), and optionally data loss are
+    aggregated per target and data type.
+
+    Args:
+        gazes: Dict of frame-indexed gaze samples or path to gaze file.
+        poses: Dict of frame-indexed pose objects or path to pose file.
+        marker_intervals: DataFrame or path to TSV with columns
+            ``marker_interval``, ``target``, ``start_timestamp``,
+            ``end_timestamp``.
+        validation_intervals: List of ``[start_frame, end_frame]`` pairs
+            defining each validation episode.
+        targets: Mapping of target ID to position array ``[x, y, z]``
+            in plane coordinates (mm).
+        distance_mm_for_homography: Assumed viewing distance in mm,
+            used as the z-component when computing offsets for the
+            homography-based data type.
+        output_directory: Directory where the results TSV will be
+            written.
+        filename: Output filename.
+        d_types: List of data types to compute offsets for. If empty,
+            defaults are selected from available data.
+        allow_data_type_fallback: If True, fall back to alternative data
+            types when the requested ones are not available.
+        include_data_loss: If True, include a ``data_loss`` column
+            reporting the fraction of NaN samples per target.
+
+    Raises:
+        ValueError: If ``marker_intervals`` is missing required columns.
+        RuntimeError: If no gaze data exists for a validation interval.
+
+    """
     output_directory = pathlib.Path(output_directory)
     if d_types is None:
         d_types = []
@@ -56,7 +93,7 @@ def compute(
         samples_per_frame = {k: v for (k, v) in gazes.items() if k >= iv[0] and k <= iv[1]}
         if not samples_per_frame:
             raise RuntimeError(
-                f"There is no gaze data on the glassesValidator surface for validation interval (frames {idx[0]} to {idx[1]}), cannot proceed. This may be because there was no gaze during this interval or because the plane was not detected."
+                f"There is no gaze data on the validation surface for validation interval (frames {iv[0]} to {iv[1]}), cannot proceed. This may be because there was no gaze during this interval or because the plane was not detected."
             )
 
         # check what data quality types we should output. Go with good defaults
