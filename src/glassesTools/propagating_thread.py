@@ -11,7 +11,14 @@ class PropagatingThread(Thread):
     """Thread that re-raises worker exceptions on join()."""
 
     def __init__(self, cleanup_fun: Callable | None = None, *args: typing.Any, **kwargs: typing.Any) -> None:
-        """Initialize with an optional cleanup callback invoked on worker failure."""
+        """Initialize with an optional cleanup callback invoked on worker failure.
+
+        Args:
+            cleanup_fun: Called if the target function raises an exception.
+            *args: Passed through to ``threading.Thread``.
+            **kwargs: Passed through to ``threading.Thread``.
+
+        """
         super().__init__(*args, **kwargs)
         self.cleanup_fun = cleanup_fun
 
@@ -26,7 +33,18 @@ class PropagatingThread(Thread):
                 self.cleanup_fun()
 
     def join(self, timeout: float | None = None) -> typing.Any:
-        """Wait for the thread to finish and re-raise any captured exception."""
+        """Wait for the thread to finish and re-raise any captured exception.
+
+        Args:
+            timeout: Maximum seconds to wait (``None`` = wait forever).
+
+        Returns:
+            The target function's return value.
+
+        Raises:
+            BaseException: Re-raises any exception from the worker thread.
+
+        """
         super().join(timeout)
         if self.exc:
             raise self.exc

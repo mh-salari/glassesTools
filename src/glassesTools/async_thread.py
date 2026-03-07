@@ -12,7 +12,12 @@ done_callback: typing.Callable = None
 
 
 def setup(enable_asyncio_debug: bool = False) -> None:
-    """Start a background event loop thread (idempotent)."""
+    """Start a background event loop thread (idempotent).
+
+    Args:
+        enable_asyncio_debug: If ``True``, enable asyncio debug mode.
+
+    """
     global loop, thread  # noqa: PLW0603
     if loop and thread:
         # already set up, nothing to do
@@ -47,7 +52,17 @@ def cleanup() -> None:
 def run(
     coroutine: typing.Coroutine, override_done_callback: typing.Callable | None = None
 ) -> concurrent.futures.Future:
-    """Submit a coroutine to the background loop and return a Future."""
+    """Submit a coroutine to the background loop and return a Future.
+
+    Args:
+        coroutine: The coroutine to schedule.
+        override_done_callback: Optional callback; if ``None``, uses the
+            module-level ``done_callback``.
+
+    Returns:
+        A ``Future`` representing the coroutine's eventual result.
+
+    """
     future = asyncio.run_coroutine_threadsafe(coroutine, loop)
     if override_done_callback:
         future.add_done_callback(override_done_callback)
@@ -57,7 +72,18 @@ def run(
 
 
 def wait(coroutine: typing.Coroutine) -> typing.Any:
-    """Submit a coroutine and block until it completes, returning its result."""
+    """Submit a coroutine and block until it completes, returning its result.
+
+    Args:
+        coroutine: The coroutine to schedule.
+
+    Returns:
+        The coroutine's return value.
+
+    Raises:
+        Exception: Re-raises any exception from the coroutine.
+
+    """
     future = run(coroutine)
     while future.running():
         time.sleep(0.1)

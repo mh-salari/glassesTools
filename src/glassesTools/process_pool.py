@@ -101,7 +101,12 @@ class ProcessPool:
     """Wrapper around pebble.ProcessPool with job tracking and callbacks."""
 
     def __init__(self, num_workers: int = 2) -> None:
-        """Initialize the pool with a target number of workers."""
+        """Initialize the pool with a target number of workers.
+
+        Args:
+            num_workers: Maximum number of concurrent worker processes.
+
+        """
         self.num_workers = num_workers
         self.auto_cleanup_if_no_work = False
 
@@ -150,7 +155,21 @@ class ProcessPool:
         *args: typing.Any,
         **kwargs: typing.Any,
     ) -> tuple[int, ProcessFuture]:
-        """Schedule a function for execution and return (job_id, future)."""
+        """Schedule a function for execution and return (job_id, future).
+
+        Lazily starts the process pool on first call.
+
+        Args:
+            fn: Callable to execute in a worker process.
+            user_data: Arbitrary data passed to *done_callback*.
+            done_callback: Called when the job finishes.
+            *args: Positional arguments for *fn*.
+            **kwargs: Keyword arguments for *fn*.
+
+        Returns:
+            A ``(job_id, future)`` tuple.
+
+        """
         with self._lock:
             if self._pool is None or not self._pool.active:
                 context = multiprocessing.get_context(
@@ -269,7 +288,18 @@ class JobProgress:
         printer: typing.Callable[[str], None] | None = None,
         print_interval: int = 100,
     ) -> None:
-        """Initialize progress state and EMA smoothers."""
+        """Initialize progress state and EMA smoothers.
+
+        Args:
+            initial: Starting item count.
+            total: Total number of items.
+            unit: Label for items (e.g. ``"frames"``).
+            update_interval: Recompute progress string every *n* updates.
+            smoothing: EMA smoothing factor (0-1).
+            printer: Optional callable to print the progress string.
+            print_interval: Print every *n* updates.
+
+        """
         self.n = initial
         self.total = total
         self.unit = unit
@@ -431,7 +461,21 @@ class JobScheduler(typing.Generic[_UserDataT]):
         priority: int | None = None,
         depends_on: set[int] | None = None,
     ) -> int:
-        """Add a job to the scheduler and return its ID."""
+        """Add a job to the scheduler and return its ID.
+
+        Args:
+            user_data: Arbitrary data passed to *done_callback*.
+            payload: The callable and its arguments.
+            done_callback: Called when the job finishes.
+            progress_indicator: Optional cross-process progress tracker.
+            exclusive_id: If set, only one job with this ID runs at a time.
+            priority: Lower values are scheduled first (default 999).
+            depends_on: Job IDs that must complete before this one starts.
+
+        Returns:
+            The new job's ID.
+
+        """
         with self._job_id_provider:
             job_id = self._job_id_provider.get_count()
         self.jobs[job_id] = JobDescription(
@@ -535,6 +579,7 @@ class JobScheduler(typing.Generic[_UserDataT]):
 
 
 def _get_status_from_future(fut: ProcessFuture) -> State:
+    """Map a pebble ``ProcessFuture`` to a ``State`` enum value."""
     if fut.running():
         return State.Running
     if fut.done():
