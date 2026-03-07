@@ -1,34 +1,31 @@
-"""non_iso.py
+"""Non-ISO MP4 box definitions (QuickTime, Apple extensions).
 
-This file is meant to contain class definitions for boxes not defined in ISO/IEC 14496-12.
-It may be useful to look here:
-https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/QTFFChap2/qtff2.html#//apple_ref/doc/uid/TP40000939-CH204-55265
-
+See: https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/QTFFChap2/qtff2.html
 """
 
 import binascii
+import struct
+from typing import BinaryIO
 
 from . import iso, mpeglookups
-from .core import *
-from .util import *
+from .core import Header, Mp4Box, Mp4FullBox
+from .util import read_i8, read_i16, read_u8, read_u16, read_u16_16, read_u32
 
 
-def box_factory_non_iso(fp, header, parent):
-    the_box = None
+def box_factory_non_iso(fp: BinaryIO, header: Header, parent: Mp4Box) -> Mp4Box:
+    """Create a non-ISO box instance by looking up the class from the header type."""
     # Normalise header type so it can be expressed in a Python Class name
     box_type = header.type.replace(" ", "_").replace("-", "_").lower()
     # globals() Return a dictionary representing the current global symbol table
-    _box_class = globals().get(box_type.capitalize() + "Box")
-    if _box_class:
-        the_box = _box_class(fp, header, parent)
-    else:
-        the_box = UndefinedBox(fp, header, parent)
-
-    return the_box
+    box_class = globals().get(box_type.capitalize() + "Box")
+    return box_class(fp, header, parent) if box_class else UndefinedBox(fp, header, parent)
 
 
 class UndefinedBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """Fallback box for unrecognized box types."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["message"] = "TODO"
@@ -37,7 +34,10 @@ class UndefinedBox(Mp4Box):
 
 
 class Avc1Box(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """AVC (H.264) visual sample entry box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["num_of_entries"] = read_u32(fp)
@@ -50,7 +50,7 @@ class Avc1Box(Mp4FullBox):
             self.box_info["frame_count"] = read_u16(fp)
             compressorname_size = read_u8(fp)
             self.box_info["compressorname"] = fp.read(compressorname_size).decode("utf-8", errors="ignore")
-            padding = fp.read(31 - compressorname_size)
+            fp.read(31 - compressorname_size)  # skip padding
             self.box_info["depth"] = f"{read_u16(fp):#06x}"
             self.box_info["pre_defined"] = read_i16(fp)
             bytes_left = self.start_of_box + self.size - fp.tell()
@@ -70,7 +70,10 @@ EncvBox = Avc1Box
 
 
 class AvccBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """AVC decoder configuration record box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["configuration_version"] = read_u8(fp)
@@ -80,7 +83,7 @@ class AvccBox(Mp4Box):
             self.box_info["lengthSizeMinusOne"] = read_u8(fp) % 4
             self.box_info["numOfSequenceParameterSets"] = read_u8(fp) % 32
             self.box_info["SequenceParameterSets_list"] = []
-            for i in range(self.box_info["numOfSequenceParameterSets"]):
+            for _ in range(self.box_info["numOfSequenceParameterSets"]):
                 spsl = read_u16(fp)
                 sequence_param = {
                     "sequenceParameterSetLength": spsl,
@@ -89,7 +92,7 @@ class AvccBox(Mp4Box):
                 self.box_info["SequenceParameterSets_list"].append(sequence_param)
             self.box_info["numOfPictureParameterSets"] = read_u8(fp)
             self.box_info["PictureParameterSets_list"] = []
-            for i in range(self.box_info["numOfPictureParameterSets"]):
+            for _ in range(self.box_info["numOfPictureParameterSets"]):
                 ppsl = read_u16(fp)
                 picture_param = {
                     "pictureParameterSetLength": ppsl,
@@ -107,7 +110,7 @@ class AvccBox(Mp4Box):
                 self.box_info["bit_depth_chroma_minus8"] = read_u8(fp) % 8
                 self.box_info["numOfSequenceParameterSetExtLength"] = read_u8(fp)
                 self.box_info["SequenceParameterSetExt_list"] = []
-                for i in range(self.box_info["numOfSequenceParameterSetExtLength"]):
+                for _ in range(self.box_info["numOfSequenceParameterSetExtLength"]):
                     spse = read_u16(fp)
                     sequence_param = {
                         "sequenceParameterSetExtLength": spse,
@@ -119,7 +122,10 @@ class AvccBox(Mp4Box):
 
 
 class HvccBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """HEVC decoder configuration record box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["configuration_version"] = read_u8(fp)
@@ -143,12 +149,12 @@ class HvccBox(Mp4Box):
             self.box_info["length_size_minus1"] = fr & 3
             self.box_info["num_of_arrays"] = read_u8(fp)
             self.box_info["array_list"] = []
-            for i in range(self.box_info["num_of_arrays"]):
+            for _ in range(self.box_info["num_of_arrays"]):
                 nt = read_u8(fp)
                 nal_dict = {"array_completeness": nt >> 7, "NAL_unit_type": nt % 64}
                 nal_dict["num_nalus"] = read_u16(fp)
                 nal_dict["nalu_list"] = []
-                for j in range(nal_dict["num_nalus"]):
+                for _ in range(nal_dict["num_nalus"]):
                     nul = read_u16(fp)
                     nal_dict["nalu_list"].append({
                         "nal_unit_length": nul,
@@ -160,7 +166,10 @@ class HvccBox(Mp4Box):
 
 
 class Av1cBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """AV1 codec configuration box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             first_byte = read_u8(fp)
@@ -188,17 +197,20 @@ class Av1cBox(Mp4Box):
 
 
 class DvccBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """Dolby Vision configuration box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["dv_version_major"] = read_u8(fp)
             self.box_info["dv_version_minor"] = read_u8(fp)
-            nextTwoBytes = read_u16(fp)
-            self.box_info["dv_profile"] = (nextTwoBytes >> 9) & 0x7F
-            self.box_info["dv_level"] = (nextTwoBytes >> 3) & 0x3F
-            self.box_info["rpu_present_flag"] = (nextTwoBytes >> 2) & 0x01
-            self.box_info["el_present_flag"] = (nextTwoBytes >> 1) & 0x01
-            self.box_info["bl_present_flag"] = nextTwoBytes & 0x01
+            next_two_bytes = read_u16(fp)
+            self.box_info["dv_profile"] = (next_two_bytes >> 9) & 0x7F
+            self.box_info["dv_level"] = (next_two_bytes >> 3) & 0x3F
+            self.box_info["rpu_present_flag"] = (next_two_bytes >> 2) & 0x01
+            self.box_info["el_present_flag"] = (next_two_bytes >> 1) & 0x01
+            self.box_info["bl_present_flag"] = next_two_bytes & 0x01
             self.box_info["dv_bl_signal_compatibility_id"] = read_u8(fp) >> 4
         finally:
             fp.seek(self.start_of_box + self.size)
@@ -208,7 +220,10 @@ DvvcBox = DvccBox
 
 
 class BtrtBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """Bitrate box with buffer size and max/average bitrate."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["bufferSizeDB"] = read_u32(fp)
@@ -219,7 +234,10 @@ class BtrtBox(Mp4Box):
 
 
 class PaspBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """Pixel aspect ratio box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["hSpacing"] = read_u32(fp)
@@ -229,7 +247,10 @@ class PaspBox(Mp4Box):
 
 
 class Mp4aBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """MPEG-4 audio sample entry box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             fp.seek(6, 1)
@@ -257,7 +278,10 @@ Ac_3Box = Ec_3Box = EncaBox = Mp4aBox
 
 
 class EsdsBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Elementary stream descriptor box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             # self.box_info['elementary_stream_descriptor'] = \
@@ -288,14 +312,10 @@ class EsdsBox(Mp4FullBox):
                 if this_descriptor_dict["tag_id"] == 4:
                     # it is the elementary stream descriptor
                     mp4ra_type = int.from_bytes(payload[0:1], byteorder="big")
-                    this_descriptor_dict["mp4ra_registered_type"] = (
-                        mpeglookups.mp4ra_table[mp4ra_type] if mp4ra_type in mpeglookups.mp4ra_table else mp4ra_type
-                    )
+                    this_descriptor_dict["mp4ra_registered_type"] = mpeglookups.mp4ra_table.get(mp4ra_type, mp4ra_type)
                     type_byte = int.from_bytes(payload[1:2], byteorder="big")
                     es_type = type_byte >> 2
-                    this_descriptor_dict["es_type"] = (
-                        mpeglookups.es_table[es_type] if es_type in mpeglookups.es_table else es_type
-                    )
+                    this_descriptor_dict["es_type"] = mpeglookups.es_table.get(es_type, es_type)
                     this_descriptor_dict["upstream_flag"] = type_byte & 2
                     this_descriptor_dict["specific_info_flag"] = type_byte & 1
                     this_descriptor_dict["buffer_size"] = int.from_bytes(payload[2:5], byteorder="big")
@@ -340,10 +360,8 @@ class EsdsBox(Mp4FullBox):
                                 two_bytes = int.from_bytes(payload[b + 4 : b + 6], byteorder="big")
                             field_size = 4
                             sound_chan = (two_bytes >> (16 - bits_read - field_size)) & 15
-                            decoder_specific_dict["channels"] = (
-                                mpeglookups.sound_channel_table[sound_chan]
-                                if sound_chan in mpeglookups.sound_channel_table
-                                else sound_chan
+                            decoder_specific_dict["channels"] = mpeglookups.sound_channel_table.get(
+                                sound_chan, sound_chan
                             )
                         else:
                             decoder_specific_dict["payload"] = binascii.b2a_hex(payload[b + 1 :]).decode("utf-8")
@@ -357,7 +375,10 @@ class EsdsBox(Mp4FullBox):
 
 
 class Dac3Box(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """AC-3 audio specific box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             my_data = struct.unpack(">I", b"\0" + fp.read(3))[0]
@@ -372,14 +393,17 @@ class Dac3Box(Mp4Box):
 
 
 class Dec3Box(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """Enhanced AC-3 audio specific box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             my_data_sub = read_u16(fp)
             self.box_info["data_rate"] = my_data_sub >> 3
             self.box_info["num_ind_sub"] = my_data_sub & 7
             self.box_info["ind_sub_list"] = []
-            for i in range(self.box_info["num_ind_sub"]):
+            for _ in range(self.box_info["num_ind_sub"]):
                 in_s = read_u16(fp)
                 fscod = in_s >> 14
                 bsid = in_s >> 9 & 31
@@ -407,7 +431,10 @@ class Dec3Box(Mp4Box):
 
 
 class DataBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """iTunes metadata data box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             fp.seek(4, 1)
@@ -417,7 +444,10 @@ class DataBox(Mp4FullBox):
 
 
 class PsshBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Protection system specific header box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["system_id"] = binascii.b2a_hex(fp.read(16)).decode("utf-8")
@@ -425,14 +455,17 @@ class PsshBox(Mp4FullBox):
                 # it is cenc
                 self.box_info["key_count"] = read_u32(fp)
                 self.box_info["key_list"] = []
-                for i in range(self.box_info["key_count"]):
+                for _ in range(self.box_info["key_count"]):
                     self.box_info["key_list"].append(binascii.b2a_hex(fp.read(16)).decode("utf-8"))
         finally:
             fp.seek(self.start_of_box + self.size)
 
 
 class TencBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Track encryption box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["reserved"] = read_u8(fp)
@@ -453,33 +486,35 @@ class TencBox(Mp4FullBox):
 
 
 class SencBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sample encryption box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             # to read this box, we need to know IV size
             self.box_info["sample_count"] = read_u32(fp)
-            iv_size_guess = (self.size - 16) // self.box_info["sample_count"]
             if self.flags & 0x000002 != 0x000002:
                 # if no sub-sampling, assume IV has a fixed size 8 or 16 bytes
                 iv_size = 16 if (self.box_info["sample_count"] * 16) <= (self.size - 16) else 8
                 self.box_info["sample_list"] = []
-                for i in range(self.box_info["sample_count"]):
+                for _ in range(self.box_info["sample_count"]):
                     self.box_info["sample_list"].append({"iv": binascii.b2a_hex(fp.read(iv_size)).decode("utf-8")})
         finally:
             fp.seek(self.start_of_box + self.size)
 
-    def populate_sample_table(self, fp, iv_size):
-        # called if sub-sampling used, once we've determined IV size (N.B. assumes IV size constant)
+    def populate_sample_table(self, fp: BinaryIO, iv_size: int) -> None:
+        """Populate sample table for sub-sampled encryption data."""
         try:
             fp_orig = fp.tell()
             # move fp to start of list
             fp.seek(self.start_of_box + self.header.header_size + 8)
             self.box_info["sample_list"] = []
-            for i in range(self.box_info["sample_count"]):
+            for _ in range(self.box_info["sample_count"]):
                 sample_dict = {"iv": binascii.b2a_hex(fp.read(iv_size)).decode("utf-8")} if iv_size else {}
                 sample_dict["subsample_count"] = read_u16(fp)
                 sample_dict["subsample_list"] = []
-                for j in range(sample_dict["subsample_count"]):
+                for _ in range(sample_dict["subsample_count"]):
                     sample_dict["subsample_list"].append({
                         "BytesOfClearData": read_u16(fp),
                         "BytesOfEncryptedData": read_u32(fp),
@@ -490,7 +525,10 @@ class SencBox(Mp4FullBox):
 
 
 class GminBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Base media info header box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["graphics_mode"] = read_u16(fp)
@@ -501,7 +539,10 @@ class GminBox(Mp4FullBox):
 
 
 class KeysBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Metadata keys box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["entry_count"] = read_u32(fp)
@@ -519,14 +560,17 @@ class KeysBox(Mp4FullBox):
 
 
 class IlstBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """iTunes metadata item list box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             bytes_left = self.size - self.header.header_size
             while bytes_left > 7:
                 current_header = Header(fp)
                 if not current_header.type.isprintable():
-                    current_header.type = "#{0:#d}".format(struct.unpack(">I", current_header.type.encode("utf-8"))[0])
+                    current_header.type = "#{:#d}".format(struct.unpack(">I", current_header.type.encode("utf-8"))[0])
                 # create box directly, not through box factory
                 current_box = ItemBox(fp, current_header, self)
                 self.children.append(current_box)
@@ -536,7 +580,10 @@ class IlstBox(Mp4Box):
 
 
 class ItemBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """Individual metadata item box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             bytes_left = self.size - self.header.header_size
@@ -550,7 +597,10 @@ class ItemBox(Mp4Box):
 
 
 class IodsBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Initial object descriptor box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             object_dict = {}
@@ -575,7 +625,10 @@ class IodsBox(Mp4FullBox):
 
 
 class Tx3gBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """3GPP timed text sample entry box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["displayFlags"] = read_u32(fp)
@@ -615,16 +668,19 @@ class Tx3gBox(Mp4FullBox):
 
 
 class FtabBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """Font table box for timed text."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["entry_count"] = read_u16(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["entry_count"]):
-                fontID = read_u16(fp)
+            for _ in range(self.box_info["entry_count"]):
+                font_id = read_u16(fp)
                 fnl = read_u8(fp)
                 self.box_info["entry_list"].append({
-                    "font_ID": fontID,
+                    "font_ID": font_id,
                     "font_name_length": fnl,
                     "font_name": fp.read(fnl).decode("utf-8"),
                 })
@@ -633,7 +689,10 @@ class FtabBox(Mp4Box):
 
 
 class XyzBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """Location metadata box."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["data_size"] = read_u16(fp)

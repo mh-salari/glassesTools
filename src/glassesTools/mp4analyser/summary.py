@@ -1,23 +1,28 @@
-"""summary.py"""
+"""Summary information extracted from an MP4 file."""
+
+from __future__ import annotations
 
 import pathlib
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .iso import Mp4File
 
 
 class Summary:
-    """Summary Class for an Mp4File Class"""
+    """Summary class for an Mp4File instance."""
 
-    def __init__(self, mp4file):
+    def __init__(self, mp4file: Mp4File) -> None:
+        """Extract summary data from the given MP4 file."""
         boxes = mp4file.children
         self.data = {}
         self.data["filename"] = mp4file.filename
         self.data["filesize (bytes)"] = pathlib.Path(mp4file.filename).stat().st_size
-        if [box for box in boxes if box.type == "ftyp" or box.type == "styp"]:
-            fstyp = [box for box in boxes if box.type == "ftyp" or box.type == "styp"][0]
+        if fstyp := next((box for box in boxes if box.type in {"ftyp", "styp"}), None):
             self.data["brand"] = fstyp.box_info["major_brand"]
         # check if there is a moov and if there is a moov that contains traks N.B only ever 0,1 moov boxes
-        if [box for box in boxes if box.type == "moov"]:
-            moov = [box for box in boxes if box.type == "moov"][0]
-            mvhd = [mvbox for mvbox in moov.children if mvbox.type == "mvhd"][0]
+        if moov := next((box for box in boxes if box.type == "moov"), None):
+            mvhd = next(box for box in moov.children if box.type == "mvhd")
             self.data["creation_time"] = mvhd.box_info["creation_time"]
             self.data["modification_time"] = mvhd.box_info["modification_time"]
             self.data["duration (secs)"] = round(mvhd.box_info["duration"] / mvhd.box_info["timescale"])
@@ -27,26 +32,23 @@ class Summary:
             self.data["track_list"] = []
             for trak in traks:
                 this_trak = {}
-                this_trak["track_id"] = [box for box in trak.children if box.type == "tkhd"][0].box_info["track_ID"]
-                mdia = [box for box in trak.children if box.type == "mdia"][0]
-                mdhd = [box for box in mdia.children if box.type == "mdhd"][0]
-                hdlr = [box for box in mdia.children if box.type == "hdlr"][0]
-                stbl = [
-                    box
-                    for box in [box for box in mdia.children if box.type == "minf"][0].children
-                    if box.type == "stbl"
-                ][0]
+                this_trak["track_id"] = next(box for box in trak.children if box.type == "tkhd").box_info["track_ID"]
+                mdia = next(box for box in trak.children if box.type == "mdia")
+                mdhd = next(box for box in mdia.children if box.type == "mdhd")
+                hdlr = next(box for box in mdia.children if box.type == "hdlr")
+                minf = next(box for box in mdia.children if box.type == "minf")
+                stbl = next(box for box in minf.children if box.type == "stbl")
                 t = mdhd.box_info["timescale"]
                 d = mdhd.box_info["duration"]
                 v = mdhd.version
 
-                sz = [box for box in stbl.children if box.type == "stsz" or box.type == "stz2"][0]
+                sz = next(box for box in stbl.children if box.type in {"stsz", "stz2"})
                 sc = sz.box_info["sample_count"]
                 if sz.box_info["sample_size"] > 0:
                     # uniform sample size
                     trak_size = sz.box_info["sample_size"] * sc
                 else:
-                    trak_size = sum([entry["entry_size"] for entry in sz.box_info["entry_list"]])
+                    trak_size = sum(entry["entry_size"] for entry in sz.box_info["entry_list"])
 
                 sample_rate = None
                 if (d < 0xFFFFFFFF and v == 0) or (d < 0xFFFFFFFFFFFFFFFF and v == 1):
@@ -57,30 +59,20 @@ class Summary:
                         )
                         sample_rate = round((sc * t) / d, 2)
 
-                codec_info = ([box for box in stbl.children if box.type == "stsd"][0]).children[0]
+                codec_info = next(box for box in stbl.children if box.type == "stsd").children[0]
                 media = hdlr.box_info["handler_type"]
                 if media == "vide":
                     this_trak["media_type"] = "video"
                     this_trak["codec_type"] = codec_info.type
-                    this_trak["width"] = codec_info.box_info["width"] if "width" in codec_info.box_info else "unknown"
-                    this_trak["height"] = (
-                        codec_info.box_info["height"] if "height" in codec_info.box_info else "unknown"
-                    )
+                    this_trak["width"] = codec_info.box_info.get("width", "unknown")
+                    this_trak["height"] = codec_info.box_info.get("height", "unknown")
                     if sample_rate is not None:
                         this_trak["frame_rate"] = sample_rate
                 elif media == "soun":
                     this_trak["media_type"] = "audio"
                     this_trak["codec_type"] = codec_info.type
-                    this_trak["channel_count"] = (
-                        codec_info.box_info["audio_channel_count"]
-                        if "audio_channel_count" in codec_info.box_info
-                        else "unknown"
-                    )
-                    this_trak["sample_rate"] = (
-                        codec_info.box_info["audio_sample_rate"]
-                        if "audio_sample_rate" in codec_info.box_info
-                        else "unknown"
-                    )
+                    this_trak["channel_count"] = codec_info.box_info.get("audio_channel_count", "unknown")
+                    this_trak["sample_rate"] = codec_info.box_info.get("audio_sample_rate", "unknown")
                 else:
                     this_trak["media_type"] = media
                     this_trak["codec_type"] = codec_info.type

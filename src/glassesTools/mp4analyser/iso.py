@@ -1,19 +1,33 @@
-"""iso.py
+"""ISO/IEC 14496-12 MP4 box definitions and file parser.
 
-This file, if and when complete ;-), contains all the class definitions of boxes that are specified in ISO/IEC 14496-12.
-Additionally a class to represent the MP4 file that contains the MP4 boxes has been defined.
-A box_factory function has also been defined, primarily to minimise coupling between modules.
-
+Contains class definitions for all supported ISO base media file format boxes,
+the Mp4File top-level container, and a box factory function.
 """
 
+import binascii
 import datetime
 import logging
 import pathlib
+import struct
+from typing import BinaryIO
 
 from . import non_iso
-from .core import *
-from .summary import *
-from .util import *
+from .core import Header, Mp4Box, Mp4FullBox
+from .summary import Summary
+from .util import (
+    read_i8_8,
+    read_i16,
+    read_i32,
+    read_i64,
+    read_u8,
+    read_u8_8,
+    read_u16,
+    read_u16_16,
+    read_u32,
+    read_u64,
+)
+
+logger = logging.getLogger(__name__)
 
 # Supported box
 # 'ftyp', 'pdin', 'moov', 'mvhd', 'meta', 'trak', 'tkhd', 'tref', 'trgr', 'edts', 'elst', 'mdia',
@@ -29,26 +43,21 @@ from .util import *
 # 'sthd', 'iinf', 'bxml', 'fiin', 'paen', 'fire', 'fpar', 'fecr', 'segr', 'gitn', 'idat'
 
 
-def box_factory(fp, header, parent):
-    """box_factory() takes a box type as a parameter and, if a class has been defined for that type, returns
-    an instance of that class.
-    """
-    the_box = None
+def box_factory(fp: BinaryIO, header: Header, parent: Mp4Box) -> Mp4Box:
+    """Create a box instance by looking up the class from the header type."""
     # Normalise header type so it can be expressed in a Python Class name
     box_type = header.type.replace(" ", "_").replace("-", "_").lower()
-    _box_class = globals().get(
-        box_type.capitalize() + "Box"
-    )  # globals() Return a dictionary representing the current global symbol table
-    if _box_class:
-        the_box = _box_class(fp, header, parent)
-        return the_box
+    box_class = globals().get(box_type.capitalize() + "Box")
+    if box_class:
+        return box_class(fp, header, parent)
     return non_iso.box_factory_non_iso(fp, header, parent)
 
 
 class Mp4File:
     """Mp4File Class, effectively the top-level container"""
 
-    def __init__(self, filename):
+    def __init__(self, filename: str) -> None:
+        """Parse the MP4 file and build the box tree."""
         self.filename = filename
         self.type = "file"
         self.children = []
@@ -71,44 +80,32 @@ class Mp4File:
             self._generate_samples_from_moofs()
         except Exception:
             # catch exception in case we can continue
-            logging.exception(f"error in {filename} after child {len(self.children)}")
+            logger.exception("error in %s after child %d", filename, len(self.children))
 
-    def _generate_samples_from_moov(self):
-        """Identify media samples in mdat for full mp4 file"""
+    def _generate_samples_from_moov(self) -> None:
+        """Identify media samples in mdat for full mp4 file."""
         mdats = [mbox for mbox in self.children if mbox.type == "mdat"]
         # generate a sample list if there is a moov that contains traks N.B only ever 0,1 moov boxes
-        if [box for box in self.children if box.type == "moov"]:
-            moov = [box for box in self.children if box.type == "moov"][0]
+        if moov := next((box for box in self.children if box.type == "moov"), None):
             traks = [tbox for tbox in moov.children if tbox.type == "trak"]
             sample_list = []
             for trak in traks:
-                trak_id = [box for box in trak.children if box.type == "tkhd"][0].box_info["track_ID"]
-                timescale = [
-                    box
-                    for box in [box for box in trak.children if box.type == "mdia"][0].children
-                    if box.type == "mdhd"
-                ][0].box_info["timescale"]
-                samplebox = [
-                    box
-                    for box in [
-                        box
-                        for box in [box for box in trak.children if box.type == "mdia"][0].children
-                        if box.type == "minf"
-                    ][0].children
-                    if box.type == "stbl"
-                ][0]
-                chunk_offsets = [box for box in samplebox.children if box.type == "stco" or box.type == "co64"][
-                    0
-                ].box_info["entry_list"]
-                sample_size_box = [box for box in samplebox.children if box.type == "stsz" or box.type == "stz2"][0]
+                trak_id = next(box for box in trak.children if box.type == "tkhd").box_info["track_ID"]
+                mdia = next(box for box in trak.children if box.type == "mdia")
+                minf = next(box for box in mdia.children if box.type == "minf")
+                samplebox = next(box for box in minf.children if box.type == "stbl")
+                chunk_offsets = next(box for box in samplebox.children if box.type in {"stco", "co64"}).box_info[
+                    "entry_list"
+                ]
+                sample_size_box = next(box for box in samplebox.children if box.type in {"stsz", "stz2"})
                 if sample_size_box.box_info["sample_size"] > 0:
                     sample_sizes = [
                         {"entry_size": sample_size_box.box_info["sample_size"]}
-                        for i in range(sample_size_box.box_info["sample_count"])
+                        for _ in range(sample_size_box.box_info["sample_count"])
                     ]
                 else:
                     sample_sizes = sample_size_box.box_info["entry_list"]
-                sample_to_chunks = [box for box in samplebox.children if box.type == "stsc"][0].box_info["entry_list"]
+                sample_to_chunks = next(box for box in samplebox.children if box.type == "stsc").box_info["entry_list"]
                 s2c_index = 0
                 next_run = 0
                 sample_idx = 0
@@ -154,17 +151,17 @@ class Mp4File:
                         mdat.box_info["message"] = "Has samples."
                     mdat.sample_list = mdat_sample_list
 
-    def _generate_samples_from_moofs(self):
-        """Generate samples within mdats of media segments for fragmented mp4 files
-        media segments are 1 moof (optionally preceded by an styp) followed by 1 or more contiguous mdats
-        I've only ever seen 1 mdat in a media segment though
+    def _generate_samples_from_moofs(self) -> None:
+        """Generate samples within mdats of media segments for fragmented mp4 files.
+
+        Media segments are 1 moof (optionally preceded by an styp) followed by 1 or more contiguous mdats.
         """
         i = 0
         while i < len(self.children) - 1:
             if self.children[i].type == "moof":
                 moof = self.children[i]
                 media_segment = {"moof_box": moof, "mdat_boxes": []}
-                sequence_number = [mfhd for mfhd in moof.children if mfhd.type == "mfhd"][0].box_info[
+                sequence_number = next(mfhd for mfhd in moof.children if mfhd.type == "mfhd").box_info[
                     "sequence_number"
                 ]
                 while i < len(self.children) - 1 and self.children[i + 1].type == "mdat":
@@ -174,7 +171,7 @@ class Mp4File:
                 data_offset = 0
                 for j, traf in enumerate([tbox for tbox in moof.children if tbox.type == "traf"]):
                     # read tfhd, there will be one
-                    tfhd = [hbox for hbox in traf.children if hbox.type == "tfhd"][0]
+                    tfhd = next(hbox for hbox in traf.children if hbox.type == "tfhd")
                     trak_id = tfhd.box_info["track_id"]
                     if "base_data_offset" in tfhd.box_info:
                         data_offset = tfhd.box_info["base_data_offset"]
@@ -184,7 +181,7 @@ class Mp4File:
                         # according to spec. should be set end of data for last fragment
                         pass
                     else:
-                        base_data_offset = media_segment["moof_box"].start_of_box
+                        data_offset = media_segment["moof_box"].start_of_box
                     for k, trun in enumerate([rbox for rbox in traf.children if rbox.type == "trun"], 1):
                         if "data_offset" in trun.box_info:
                             data_offset += trun.box_info["data_offset"]
@@ -196,7 +193,7 @@ class Mp4File:
                             "sample_count": trun.box_info["sample_count"],
                             "run_samples": [],
                         }
-                        has_sample_size = True if trun.flags & 0x0200 == 0x0200 else False
+                        has_sample_size = trun.flags & 0x0200 == 0x0200
                         for l, sample in enumerate(trun.box_info["samples"], 1):
                             if not has_sample_size:
                                 sample_size = tfhd.box_info["default_sample_size"]
@@ -217,19 +214,22 @@ class Mp4File:
                                 mdat.sample_list.append(run_dict)
             i += 1
 
-    def read_bytes(self, offset, num_bytes):
+    def read_bytes(self, offset: int, num_bytes: int) -> bytes:
+        """Read raw bytes from the file at the given offset."""
         with pathlib.Path(self.filename).open("rb") as f:
             f.seek(offset)
             bytes_read = f.read(num_bytes)
         f.close()
         return bytes_read
 
-    def get_summary(self):
+    def get_summary(self) -> dict:
+        """Return a summary dictionary for this MP4 file."""
         if not self.summary:
             self.summary = Summary(self)
         return self.summary.data
 
-    def search_boxes_for_type(self, box_type):
+    def search_boxes_for_type(self, box_type: str) -> list[Mp4Box]:
+        """Search all child boxes recursively for the given type."""
         type_matches = []
         for box in self.children:
             if box.type == box_type:
@@ -243,7 +243,10 @@ class Mp4File:
 
 
 class FreeBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """Free space box (free/skip) — padding or deleted data."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             pass
@@ -255,7 +258,10 @@ SkipBox = FreeBox
 
 
 class FtypBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """File type and compatibility box (ftyp)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info = {
@@ -275,7 +281,10 @@ StypBox = FtypBox
 
 
 class ColrBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """Colour information box (colr)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["color_type"] = fp.read(4).decode("utf-8")
@@ -289,7 +298,10 @@ class ColrBox(Mp4Box):
 
 
 class PdinBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Progressive download information box (pdin)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         end_of_box = self.start_of_box + self.size
         try:
@@ -301,7 +313,10 @@ class PdinBox(Mp4FullBox):
 
 
 class ContainerBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """Generic container box that recursively parses child boxes."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             bytes_left = self.size - self.header.header_size
@@ -323,7 +338,8 @@ GmhdBox = SchiBox = ContainerBox
 class MetaBox(Mp4Box):
     """Seems to be a discrepancy between Apple atom spec and ISO about whether this is a versioned box"""
 
-    def __init__(self, fp, header, parent):
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             bytes_left = self.size - self.header.header_size
@@ -348,7 +364,10 @@ class MetaBox(Mp4Box):
 
 
 class MdatBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """Media data box (mdat)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         self.sample_list = []
         try:
@@ -358,7 +377,10 @@ class MdatBox(Mp4Box):
 
 
 class MvhdBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Movie header box (mvhd)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             dt_base = datetime.datetime(1904, 1, 1, 0, 0, 0)
@@ -391,7 +413,10 @@ class MvhdBox(Mp4FullBox):
 
 
 class MfhdBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Movie fragment header box (mfhd)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["sequence_number"] = read_u32(fp)
@@ -400,7 +425,10 @@ class MfhdBox(Mp4FullBox):
 
 
 class MehdBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Movie extends header box (mehd)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             if self.version == 1:
@@ -412,12 +440,15 @@ class MehdBox(Mp4FullBox):
 
 
 class ElstBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Edit list box (elst)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["entry_count"] = read_u32(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 if self.version == 1:
                     self.box_info["entry_list"].append({
                         "segment_duration": read_u64(fp),
@@ -435,7 +466,10 @@ class ElstBox(Mp4FullBox):
 
 
 class TkhdBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Track header box (tkhd)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             dt_base = datetime.datetime(1904, 1, 1, 0, 0, 0)
@@ -472,7 +506,10 @@ class TkhdBox(Mp4FullBox):
 
 
 class TfhdBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Track fragment header box (tfhd)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["track_id"] = read_u32(fp)
@@ -486,15 +523,18 @@ class TfhdBox(Mp4FullBox):
                 self.box_info["default_sample_size"] = read_u32(fp)
             if self.flags & 0x000020 == 0x000020:
                 self.box_info["default_sample_flags"] = f"{read_u32(fp):#08x}"
-            self.box_info["duration_is_empty"] = True if self.flags & 0x010000 == 0x010000 else False
+            self.box_info["duration_is_empty"] = self.flags & 0x010000 == 0x010000
             # depending on value of base data offset this flag mght be ignored
-            self.box_info["default_base_is_moof"] = True if self.flags & 0x020000 == 0x020000 else False
+            self.box_info["default_base_is_moof"] = self.flags & 0x020000 == 0x020000
         finally:
             fp.seek(self.start_of_box + self.size)
 
 
 class TrexBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Track extends defaults box (trex)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["track_ID"] = read_u32(fp)
@@ -507,12 +547,15 @@ class TrexBox(Mp4FullBox):
 
 
 class LevaBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Level assignment box (leva)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["level_count"] = read_u8(fp)
             self.box_info["level_list"] = []
-            for i in range(self.box_info["level_count"]):
+            for _ in range(self.box_info["level_count"]):
                 level_dict = {"track_ID": read_u32(fp)}
                 pad_assign = read_u8(fp)
                 level_dict["padding_flag"] = pad_assign // 128
@@ -530,7 +573,10 @@ class LevaBox(Mp4FullBox):
 
 
 class TfraBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Track fragment random access box (tfra)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["track_ID"] = read_u32(fp)
@@ -540,7 +586,7 @@ class TfraBox(Mp4FullBox):
             self.box_info["length_size_of_sample_num"] = length_fields & 3
             self.box_info["number_of_entry"] = read_u32(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["number_of_entry"]):
+            for _ in range(self.box_info["number_of_entry"]):
                 entry_dict = {}
                 if self.version == 1:
                     entry_dict["time"] = read_u64(fp)
@@ -572,7 +618,10 @@ class TfraBox(Mp4FullBox):
 
 
 class MfroBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Movie fragment random access offset box (mfro)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["size"] = read_u32(fp)
@@ -581,7 +630,10 @@ class MfroBox(Mp4FullBox):
 
 
 class CprtBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Copyright box (cprt)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             # I think this is right
@@ -600,7 +652,10 @@ class CprtBox(Mp4FullBox):
 
 
 class TselBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Track selection box (tsel)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["switch_group"] = read_u32(fp)
@@ -615,7 +670,10 @@ class TselBox(Mp4FullBox):
 
 
 class StriBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sub-track information box (stri)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["switch_group"] = read_u16(fp)
@@ -632,13 +690,16 @@ class StriBox(Mp4FullBox):
 
 
 class IlocBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Item location box (iloc)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["offset_size"] = read_u32(fp)
             self.box_info["length_size"] = read_u32(fp)
             self.box_info["base_offset_size"] = read_u32(fp)
-            if self.version == 1 or self.version == 2:
+            if self.version in {1, 2}:
                 self.box_info["index_size"] = read_u32(fp)
             else:
                 self.box_info["reserved"] = read_u32(fp)
@@ -647,13 +708,13 @@ class IlocBox(Mp4FullBox):
             elif self.version == 2:
                 self.box_info["item_count"] = read_u32(fp)
             self.box_info["item_list"] = []
-            for i in range(self.box_info["item_count"]):
+            for _ in range(self.box_info["item_count"]):
                 item = {}
                 if self.version < 2:
                     item["item_ID"] = read_u16(fp)
                 elif self.version == 2:
                     item["item_ID"] = read_u32(fp)
-                if self.version == 1 or self.version == 2:
+                if self.version in {1, 2}:
                     item["construction_method"] = read_u16(fp) % 16
                 item["data_reference_index"] = read_u16(fp)
                 if self.box_info["offset_size"] == 4:
@@ -662,9 +723,9 @@ class IlocBox(Mp4FullBox):
                     item["base_offset"] = read_u64(fp)
                 item["extent_count"] = read_u16(fp)
                 item["extent_list"] = []
-                for j in range(item["extent_count"]):
+                for _ in range(item["extent_count"]):
                     extent = {}
-                    if self.version == 1 or self.version == 2:
+                    if self.version in {1, 2}:
                         if self.box_info["index_size"] == 4:
                             extent["extent_index"] = read_u32(fp)
                         elif self.box_info["index_size"] == 8:
@@ -684,11 +745,14 @@ class IlocBox(Mp4FullBox):
 
 
 class IproBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Item protection box (ipro)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["protection_count"] = read_u16(fp)
-            for i in range(self.box_info["protection_count"]):
+            for _ in range(self.box_info["protection_count"]):
                 current_header = Header(fp)
                 current_box = box_factory(fp, current_header, self)
                 self.children.append(current_box)
@@ -697,7 +761,10 @@ class IproBox(Mp4FullBox):
 
 
 class FrmaBox(Mp4Box):
-    def __init__(self, fp, header, parent):
+    """Original format box (frma)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["data_format"] = fp.read(4).decode("utf-8")
@@ -706,7 +773,10 @@ class FrmaBox(Mp4Box):
 
 
 class SchmBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Scheme type box (schm)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["scheme_type"] = fp.read(4).decode("utf-8")
@@ -718,7 +788,10 @@ class SchmBox(Mp4FullBox):
 
 
 class Xml_Box(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """XML container box (xml)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["xml_data"] = fp.read(self.size - (self.header.header_size + 4)).decode(
@@ -729,7 +802,10 @@ class Xml_Box(Mp4FullBox):
 
 
 class PitmBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Primary item reference box (pitm)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             if self.version == 0:
@@ -742,7 +818,10 @@ class PitmBox(Mp4FullBox):
 
 # This is just a versioned container box
 class IrefBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Item reference box (iref)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             bytes_left = self.size - self.header.header_size
@@ -756,7 +835,10 @@ class IrefBox(Mp4FullBox):
 
 
 class MereBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Metabox relation box (mere)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["first_metabox_handler_type"] = fp.read(4).decode("utf-8")
@@ -767,7 +849,10 @@ class MereBox(Mp4FullBox):
 
 
 class TrunBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Track fragment run box (trun)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["sample_count"] = read_u32(fp)
@@ -775,12 +860,12 @@ class TrunBox(Mp4FullBox):
                 self.box_info["data_offset"] = read_i32(fp)
             if self.flags & 0x000004 == 0x000004:
                 self.box_info["first_sample_flags"] = f"{read_u32(fp):#08x}"
-            has_sample_duration = True if self.flags & 0x000100 == 0x000100 else False
-            has_sample_size = True if self.flags & 0x000200 == 0x000200 else False
-            has_sample_flags = True if self.flags & 0x000400 == 0x000400 else False
-            has_scto = True if self.flags & 0x000800 == 0x000800 else False
+            has_sample_duration = self.flags & 0x000100 == 0x000100
+            has_sample_size = self.flags & 0x000200 == 0x000200
+            has_sample_flags = self.flags & 0x000400 == 0x000400
+            has_scto = self.flags & 0x000800 == 0x000800
             sample_list = []
-            for i in range(self.box_info["sample_count"]):
+            for _ in range(self.box_info["sample_count"]):
                 sample = {}
                 if has_sample_duration:
                     sample["sample_duration"] = read_u32(fp)
@@ -800,7 +885,10 @@ class TrunBox(Mp4FullBox):
 
 
 class TfdtBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Track fragment decode time box (tfdt)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             if self.version == 1:
@@ -812,7 +900,10 @@ class TfdtBox(Mp4FullBox):
 
 
 class MdhdBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Media header box (mdhd)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             dt_base = datetime.datetime(1904, 1, 1, 0, 0, 0)
@@ -848,7 +939,10 @@ class MdhdBox(Mp4FullBox):
 
 
 class ElngBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Extended language tag box (elng)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["extended_language"] = fp.read(self.size - (self.header.header_size + 4)).split(b"\x00")[0]
@@ -857,11 +951,14 @@ class ElngBox(Mp4FullBox):
 
 
 class DrefBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Data reference box (dref)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["entry_count"] = read_u32(fp)
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 current_header = Header(fp)
                 current_box = box_factory(fp, current_header, self)
                 self.children.append(current_box)
@@ -870,7 +967,10 @@ class DrefBox(Mp4FullBox):
 
 
 class Url_Box(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Data entry URL box (url)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             if self.flags & 0x000001 != 1:
@@ -881,11 +981,14 @@ class Url_Box(Mp4FullBox):
 
 
 class Urn_Box(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Data entry URN box (urn)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             if self.flags & 0x000001 != 1:
-                name, ignore, location = fp.read(self.size - (self.header.header_size + 4)).partition(b"\x00")
+                _name, _sep, location = fp.read(self.size - (self.header.header_size + 4)).partition(b"\x00")
                 self.box_info["name"] = location.decode("utf-8", errors="ignore")
                 self.box_info["location"] = location.decode("utf-8", errors="ignore")
         finally:
@@ -893,7 +996,10 @@ class Urn_Box(Mp4FullBox):
 
 
 class HdlrBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Handler reference box (hdlr)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             fp.seek(4, 1)
@@ -906,28 +1012,18 @@ class HdlrBox(Mp4FullBox):
 
 
 class StblBox(ContainerBox):
-    # Sub-class from container box so we can do some extra things with child boxes
-    def __init__(self, fp, header, parent):
+    """Sample table box (stbl) — resolves cross-box dependencies after parsing children."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             # Some sample table boxes have dependencies on other sample table table boxes in order to read correctly
             # Fill stdp, sdtp lists using sample count in stsz
-            sz = (
-                [box for box in self.children if box.type == "stsz" or box.type == "stz2"][0]
-                if [box for box in self.children if box.type == "stsz" or box.type == "stz2"]
-                else False
-            )
+            sz = next((box for box in self.children if box.type in {"stsz", "stz2"}), None)
             sc = sz.box_info["sample_count"] if sz else False
-            sdtp = (
-                [box for box in self.children if box.type == "sdtp"][0]
-                if [box for box in self.children if box.type == "sdtp"]
-                else False
-            )
-            stdp = (
-                [box for box in self.children if box.type == "stdp"][0]
-                if [box for box in self.children if box.type == "stdp"]
-                else False
-            )
+            sdtp = next((box for box in self.children if box.type == "sdtp"), None)
+            stdp = next((box for box in self.children if box.type == "stdp"), None)
             if sc and sdtp:
                 sdtp.update_table(fp, sc)
             if sc and stdp:
@@ -937,54 +1033,44 @@ class StblBox(ContainerBox):
 
 
 class TrafBox(ContainerBox):
-    # Sub-class from container box so we can do some extra things with child boxes
-    def __init__(self, fp, header, parent):
+    """Track fragment box (traf) — resolves SENC encryption info after parsing children."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             # if we have a senc box
-            senc = (
-                [box for box in self.children if box.type == "senc"][0]
-                if [box for box in self.children if box.type == "senc"]
-                else False
-            )
-            if senc:
-                # check if it has sub-sampling before getting IV_size from sgpd or saiz
-                if senc.flags & 0x000002 == 0x000002:
-                    per_sample_iv_size = 0
-                    sgpd = (
-                        [box for box in self.children if box.type == "sgpd"][0]
-                        if [box for box in self.children if box.type == "sgpd"]
-                        else False
-                    )
-                    saiz = (
-                        [box for box in self.children if box.type == "saiz"][0]
-                        if [box for box in self.children if box.type == "saiz"]
-                        else False
-                    )
-                    if sgpd and sgpd.box_info["grouping_type"] == "seig":
-                        # I've only ever seen a single entry in seig so get IV size from this
-                        per_sample_iv_size = sgpd.box_info["entry_list"][0]["per_sample_iv_size"]
-                    # try saiz
-                    elif saiz:
-                        # does it have non-zero default size?
-                        if saiz.box_info["default_sample_info_size"] > 0:
-                            sample_size = saiz.box_info["default_sample_info_size"]
-                        else:
-                            sample_size = min([
-                                sample["sample_info_size"] for sample in saiz.box_info["sample_info_size_list"]
-                            ])
-                        # deduct 10 or 18 from sample size (8 or 16 byte IV + 2 byte sub-sample count) and divide by six
-                        # (2 bytes clear data size + 4 bytes enc data size)
-                        per_sample_iv_size = (
-                            8 if (sample_size - 10) % 6 == 0 else 16 if (sample_size - 18) % 6 == 0 else 0
+            senc = next((box for box in self.children if box.type == "senc"), None)
+            # check if it has sub-sampling before getting IV_size from sgpd or saiz
+            if senc and senc.flags & 0x000002 == 0x000002:
+                per_sample_iv_size = 0
+                sgpd = next((box for box in self.children if box.type == "sgpd"), None)
+                saiz = next((box for box in self.children if box.type == "saiz"), None)
+                if sgpd and sgpd.box_info["grouping_type"] == "seig":
+                    # I've only ever seen a single entry in seig so get IV size from this
+                    per_sample_iv_size = sgpd.box_info["entry_list"][0]["per_sample_iv_size"]
+                # try saiz
+                elif saiz:
+                    # does it have non-zero default size?
+                    if saiz.box_info["default_sample_info_size"] > 0:
+                        sample_size = saiz.box_info["default_sample_info_size"]
+                    else:
+                        sample_size = min(
+                            sample["sample_info_size"] for sample in saiz.box_info["sample_info_size_list"]
                         )
-                    senc.populate_sample_table(fp, per_sample_iv_size)
+                    # deduct 10 or 18 from sample size (8 or 16 byte IV + 2 byte sub-sample count) and divide by six
+                    # (2 bytes clear data size + 4 bytes enc data size)
+                    per_sample_iv_size = 8 if (sample_size - 10) % 6 == 0 else 16 if (sample_size - 18) % 6 == 0 else 0
+                senc.populate_sample_table(fp, per_sample_iv_size)
         finally:
             fp.seek(self.start_of_box + self.size)
 
 
 class VmhdBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Video media header box (vmhd)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["graphicsmode"] = read_u16(fp)
@@ -994,7 +1080,10 @@ class VmhdBox(Mp4FullBox):
 
 
 class SmhdBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sound media header box (smhd)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["balance"] = read_i8_8(fp)
@@ -1003,7 +1092,10 @@ class SmhdBox(Mp4FullBox):
 
 
 class HmhdBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Hint media header box (hmhd)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["maxPDUsize"] = read_u16(fp)
@@ -1015,7 +1107,10 @@ class HmhdBox(Mp4FullBox):
 
 
 class NmhdBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Null media header box (nmhd)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
 
         try:
@@ -1025,11 +1120,14 @@ class NmhdBox(Mp4FullBox):
 
 
 class StsdBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sample description box (stsd)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["entry_count"] = read_u32(fp)
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 current_header = Header(fp)
                 current_box = box_factory(fp, current_header, self)
                 self.children.append(current_box)
@@ -1038,24 +1136,30 @@ class StsdBox(Mp4FullBox):
 
 
 class SttsBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Decoding time to sample box (stts)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["entry_count"] = read_u32(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 self.box_info["entry_list"].append({"sample_count": read_u32(fp), "sample_delta": read_u32(fp)})
         finally:
             fp.seek(self.start_of_box + self.size)
 
 
 class CttsBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Composition time to sample box (ctts)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["entry_count"] = read_u32(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 if self.version == 1:
                     self.box_info["entry_list"].append({"sample_count": read_u32(fp), "sample_offset": read_i32(fp)})
                 else:
@@ -1065,7 +1169,10 @@ class CttsBox(Mp4FullBox):
 
 
 class CslgBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Composition to decode timeline mapping box (cslg)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             if self.version == 1:
@@ -1085,24 +1192,30 @@ class CslgBox(Mp4FullBox):
 
 
 class StssBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sync sample box (stss)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["entry_count"] = read_u32(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 self.box_info["entry_list"].append({"sample_number": read_u32(fp)})
         finally:
             fp.seek(self.start_of_box + self.size)
 
 
 class StshBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Shadow sync sample box (stsh)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["entry_count"] = read_u32(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 self.box_info["entry_list"].append({
                     "shadowed_sample_number": read_u32(fp),
                     "sync_sample_number": read_u32(fp),
@@ -1112,12 +1225,15 @@ class StshBox(Mp4FullBox):
 
 
 class StscBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sample to chunk box (stsc)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["entry_count"] = read_u32(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 first_chunk = read_u32(fp)
                 samples_per_chunk = read_u32(fp)
                 samples_description_index = read_u32(fp)
@@ -1131,36 +1247,45 @@ class StscBox(Mp4FullBox):
 
 
 class StcoBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Chunk offset box (stco)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["entry_count"] = read_u32(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 self.box_info["entry_list"].append({"chunk_offset": read_u32(fp)})
         finally:
             fp.seek(self.start_of_box + self.size)
 
 
 class Co64Box(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """64-bit chunk offset box (co64)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["entry_count"] = read_u32(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 self.box_info["entry_list"].append({"chunk_offset": read_u64(fp)})
         finally:
             fp.seek(self.start_of_box + self.size)
 
 
 class PadbBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Padding bits box (padb)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["sample_count"] = read_u32(fp)
             self.box_info["sample_list"] = []
-            for i in range(self.box_info["sample_count"]):
+            for _ in range(self.box_info["sample_count"]):
                 pads = read_u8(fp)
                 self.box_info["entry_list"].append({"pad1": pads // 16, "pad2": pads % 16})
         finally:
@@ -1168,21 +1293,21 @@ class PadbBox(Mp4FullBox):
 
 
 class SubsBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sub-sample information box (subs)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["entry_count"] = read_u32(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 sample_delta = read_u32(fp)
                 subsample_count = read_u16(fp)
                 if subsample_count > 0:
                     subsample_list = []
-                    for j in range(subsample_count):
-                        if self.version == 1:
-                            subsample_size = read_u32(fp)
-                        else:
-                            subsample_size = read_u16(fp)
+                    for _ in range(subsample_count):
+                        subsample_size = read_u32(fp) if self.version == 1 else read_u16(fp)
                         subsample_priority = read_u8(fp)
                         discardable = read_u8(fp)
                         codec_specific_parameters = read_u32(fp)
@@ -1202,7 +1327,10 @@ class SubsBox(Mp4FullBox):
 
 
 class SbgpBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sample to group box (sbgp)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["grouping_type"] = fp.read(4).decode("utf-8")
@@ -1210,7 +1338,7 @@ class SbgpBox(Mp4FullBox):
                 self.box_info["grouping_type_parameter"] = read_u32(fp)
             self.box_info["entry_count"] = read_u32(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 self.box_info["entry_list"].append({
                     "sample_count": read_u32(fp),
                     "group_description_index": read_u32(fp),
@@ -1220,7 +1348,10 @@ class SbgpBox(Mp4FullBox):
 
 
 class SgpdBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sample group description box (sgpd)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["grouping_type"] = fp.read(4).decode("utf-8")
@@ -1230,7 +1361,7 @@ class SgpdBox(Mp4FullBox):
                 self.box_info["default_sample_description_index"] = read_u32(fp)
             self.box_info["entry_count"] = read_u32(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 if self.box_info["default_length"] == 0 and self.version == 1:
                     description_length = read_u32(fp)
                 else:
@@ -1255,7 +1386,10 @@ class SgpdBox(Mp4FullBox):
 
 
 class SaizBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sample auxiliary information sizes box (saiz)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             if self.flags & 0x000001 == 0x000001:
@@ -1265,14 +1399,17 @@ class SaizBox(Mp4FullBox):
             self.box_info["sample_count"] = read_u32(fp)
             if self.box_info["default_sample_info_size"] == 0:
                 self.box_info["sample_info_size_list"] = []
-                for i in range(self.box_info["sample_count"]):
+                for _ in range(self.box_info["sample_count"]):
                     self.box_info["sample_info_size_list"].append({"sample_info_size": read_u8(fp)})
         finally:
             fp.seek(self.start_of_box + self.size)
 
 
 class SaioBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sample auxiliary information offsets box (saio)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             if self.flags & 0x000001 == 0x000001:
@@ -1280,7 +1417,7 @@ class SaioBox(Mp4FullBox):
                 self.box_info["aux_info_type_parameter"] = read_u32(fp)
             self.box_info["entry_count"] = read_u32(fp)
             self.box_info["offset_list"] = []
-            for i in range(self.box_info["entry_count"]):
+            for _ in range(self.box_info["entry_count"]):
                 if self.version == 0:
                     self.box_info["offset_list"].append({"offset": read_u32(fp)})
                 else:
@@ -1290,27 +1427,33 @@ class SaioBox(Mp4FullBox):
 
 
 class StszBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sample size box (stsz)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["sample_size"] = read_u32(fp)
             self.box_info["sample_count"] = read_u32(fp)
             if self.box_info["sample_size"] == 0:
                 self.box_info["entry_list"] = []
-                for i in range(self.box_info["sample_count"]):
+                for _ in range(self.box_info["sample_count"]):
                     self.box_info["entry_list"].append({"entry_size": read_u32(fp)})
         finally:
             fp.seek(self.start_of_box + self.size)
 
 
 class Stz2Box(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Compact sample size box (stz2)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["field_size"] = read_u32(fp)
             self.box_info["sample_count"] = read_u32(fp)
             self.box_info["entry_list"] = []
-            for i in range(self.box_info["sample_count"]):
+            for _ in range(self.box_info["sample_count"]):
                 if self.box_info["field_size"] == 4:
                     mybyte = read_u8(fp)
                     self.box_info["entry_list"].append({"entry_size": mybyte // 16}, {"entry_size+": mybyte % 16})
@@ -1323,35 +1466,43 @@ class Stz2Box(Mp4FullBox):
 
 
 class StdpBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sample degradation priority box (stdp)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             pass
         finally:
             fp.seek(self.start_of_box + self.size)
 
-    def update_table(self, fp, sc):
+    def update_table(self, fp: BinaryIO, sc: int) -> None:
+        """Populate sample list by re-reading box data with known sample count."""
         fp_orig = fp.tell()
         fp.seek(self.start_of_box + self.header.header_size + 4)
         self.box_info["sample_list"] = []
-        for i in range(sc):
+        for _ in range(sc):
             self.box_info["sample_list"].append({"priority": read_u16(fp)})
         fp.seek(fp_orig)
 
 
 class SdtpBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Sample dependency type box (sdtp)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             pass
         finally:
             fp.seek(self.start_of_box + self.size)
 
-    def update_table(self, fp, sc):
+    def update_table(self, fp: BinaryIO, sc: int) -> None:
+        """Populate sample list by re-reading box data with known sample count."""
         fp_orig = fp.tell()
         fp.seek(self.start_of_box + self.header.header_size + 4)
         self.box_info["sample_list"] = []
-        for i in range(sc):
+        for _ in range(sc):
             the_byte = read_u8(fp)
             is_leading = the_byte >> 6
             depends_on = the_byte >> 4 & 3
@@ -1367,7 +1518,10 @@ class SdtpBox(Mp4FullBox):
 
 
 class SidxBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Segment index box (sidx)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["reference_ID"] = read_u32(fp)
@@ -1381,7 +1535,7 @@ class SidxBox(Mp4FullBox):
             fp.seek(2, 1)
             self.box_info["reference_count"] = read_u16(fp)
             self.box_info["reference_list"] = []
-            for i in range(self.box_info["reference_count"]):
+            for _ in range(self.box_info["reference_count"]):
                 rt_sz = read_u32(fp)
                 subsegment_dur = read_u32(fp)
                 st_sz = read_u32(fp)
@@ -1398,15 +1552,18 @@ class SidxBox(Mp4FullBox):
 
 
 class SsixBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Subsegment index box (ssix)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["subsegment_count"] = read_u32(fp)
             self.box_info["subsegment_list"] = []
-            for i in range(self.box_info["subsegment_count"]):
+            for _ in range(self.box_info["subsegment_count"]):
                 subsegment_dict = {"range_count": read_u32(fp)}
                 range_list = []
-                for j in range(self.box_info["range_count"]):
+                for _ in range(self.box_info["range_count"]):
                     l_r = read_u32(fp)
                     range_list.append({"level": l_r // 16777216, "range_size": l_r % 16777216})
                 subsegment_dict["range_list"] = range_list
@@ -1416,7 +1573,10 @@ class SsixBox(Mp4FullBox):
 
 
 class PrftBox(Mp4FullBox):
-    def __init__(self, fp, header, parent):
+    """Producer reference time box (prft)."""
+
+    def __init__(self, fp: BinaryIO, header: Header, parent: Mp4Box) -> None:
+        """Parse box data from the file pointer."""
         super().__init__(fp, header, parent)
         try:
             self.box_info["reference_track_id"] = read_u32(fp)

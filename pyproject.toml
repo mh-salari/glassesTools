@@ -178,3 +178,6 @@ lint.ignore = [
 "src/glassesTools/validation/default_poster/__init__.py" = ["RUF067", "PLC0415"]  # functions defined in __init__ by design; deferred import avoids circular dependency
 "src/glassesTools/validation/dynamic/__init__.py" = ["RUF067"]  # functions defined in __init__ by design
 "src/glassesTools/validation/dynamic/stim.py" = ["B023", "PLW0603", "TRY301"]  # closures capture loop vars intentionally (used in same iteration); globals for module-level aruco dict state; raise inside try is fine here
+"src/glassesTools/mp4analyser/core.py" = ["A003", "TRY002"]  # type property is fundamental MP4 box API; vendored library uses base Exception
+"src/glassesTools/mp4analyser/non_iso.py" = ["PLR1702"]  # deeply nested ESDS descriptor parsing
+"src/glassesTools/mp4analyser/iso.py" = ["N801", "DTZ001", "PLR1702", "FURB118"]  # class names match MP4 box types (url_, urn_, xml_); MP4 epoch timestamps without timezone; deeply nested parsing; lambda sort key is clearer than operator.itemgetter
