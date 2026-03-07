@@ -18,14 +18,37 @@ if typing.TYPE_CHECKING:
 
 
 class Coordinate(typing.NamedTuple):
-    """2D coordinate with x and y components."""
+    """2D coordinate with x and y components.
+
+    Attributes:
+        x: Horizontal position.
+        y: Vertical position.
+
+    """
 
     x: float = 0.0
     y: float = 0.0
 
 
 class Plane:
-    """A planar surface defined by ArUco markers, used for gaze projection."""
+    """A planar surface defined by ArUco markers, used for gaze projection.
+
+    Loads marker positions (from a CSV file, package resource, or DataFrame),
+    validates them against the ArUco dictionary, and generates a reference image
+    with the markers drawn at their correct positions.
+
+    Attributes:
+        marker_size: Marker side length in plane units (after scaling).
+        markers: Marker objects keyed by marker ID.
+        plane_size: Width and height of the plane.
+        bbox: Bounding box ``[x_min, y_min, x_max, y_max]`` in plane units.
+        aruco_dict_id: OpenCV ArUco dictionary identifier.
+        aruco_dict: OpenCV ArUco dictionary object.
+        marker_border_bits: Number of border bits around each marker.
+        unit: Measurement unit label (informational only), or ``None``.
+        min_num_markers: Minimum markers required for a valid pose estimate.
+
+    """
 
     default_ref_image_name = "reference_image.png"
 
@@ -43,7 +66,27 @@ class Plane:
         ref_image_size: int = 1920,
         min_num_markers: int = 3,
     ) -> None:
-        """Initialize a plane from marker positions, size, and ArUco dictionary settings."""
+        """Initialize a plane from marker positions, size, and ArUco dictionary settings.
+
+        Args:
+            markers: Marker positions as a path to a CSV file, or a DataFrame
+                with ``x`` and ``y`` columns indexed by marker ID.
+            marker_size: Default marker side length in plane units.
+            plane_size: Width and height of the plane.
+            aruco_dict_id: OpenCV ArUco dictionary identifier.
+            marker_border_bits: Number of border bits around each marker.
+            pos_size_scale_fac: Multiplier applied to all positions and sizes
+                read from the marker file or *marker_size*.
+            unit: Measurement unit label (purely informational).
+            package_to_read_from: If provided, reads the marker file from this
+                Python package's resources instead of the filesystem.
+            ref_image_store_path: Where to save the generated reference image,
+                or ``None`` to skip saving.
+            ref_image_size: Largest dimension (in pixels) of the reference image.
+            min_num_markers: Minimum number of detected markers required for a
+                valid pose estimate.
+
+        """
         self.marker_size = marker_size * pos_size_scale_fac
         # marker positions
         self.markers: dict[int, marker.Marker] = {}
@@ -75,7 +118,16 @@ class Plane:
         self._ref_image_cache: dict[int, np.ndarray] = {ref_image_size: img}
 
     def set_origin(self, origin: Coordinate) -> None:
-        """Set the plane origin, shifting all markers and the bounding box accordingly."""
+        """Set the plane origin, shifting all markers and the bounding box.
+
+        The offset is relative to the current origin, so calling
+        ``set_origin(Coordinate(5, 0))`` three times shifts the origin
+        rightward by 15 units total.
+
+        Args:
+            origin: New origin position on the current plane.
+
+        """
         offset = np.array(origin) - self._origin
 
         for i in self.markers:
@@ -89,7 +141,23 @@ class Plane:
         self._origin = origin
 
     def get_ref_image(self, im_size: int | None = None, as_rgb: bool = False) -> np.ndarray:
-        """Return a copy of the reference image, optionally resized or in RGB."""
+        """Return a copy of the reference image, optionally resized or converted to RGB.
+
+        Resized versions are cached so repeated requests for the same size
+        do not recompute the resize.
+
+        Args:
+            im_size: Largest dimension in pixels.  ``None`` uses the default
+                size from construction.
+            as_rgb: If ``True``, convert from OpenCV's BGR to RGB.
+
+        Returns:
+            Copy of the reference image.
+
+        Raises:
+            TypeError: If *im_size* is not an ``int``.
+
+        """
         if im_size is None:
             im_size = self._ref_image_size
         if not isinstance(im_size, int):
@@ -116,7 +184,20 @@ class Plane:
         color: tuple[int, ...] | None = None,
         size: int = 6,
     ) -> None:
-        """Draw a gaze point on the plane reference image."""
+        """Draw a gaze point on the plane reference image.
+
+        Skipped silently if *x* is NaN.  When no *color* is given, a green
+        background circle is drawn first, then a smaller black dot on top.
+
+        Args:
+            img: Reference image to draw on (modified in-place).
+            x: Gaze x-coordinate in plane units.
+            y: Gaze y-coordinate in plane units.
+            sub_pixel_fac: Sub-pixel rendering factor.
+            color: BGR color tuple.  ``None`` draws green+black default.
+            size: Radius of the inner dot in pixels.
+
+        """
         if not math.isnan(x):
             xy = transforms.to_image_pos(x, y, self.bbox, [img.shape[1], img.shape[0]])
             if color is None:
@@ -127,6 +208,23 @@ class Plane:
     def _load_markers(
         self, markers: str | pathlib.Path | pd.DataFrame, pos_size_scale_fac: float, package_to_read_from: str | None
     ) -> None:
+        """Load marker positions and build ``Marker`` objects.
+
+        Reads marker center positions, validates IDs against the ArUco
+        dictionary, and computes rotated corner coordinates for each marker.
+
+        Args:
+            markers: Path to a CSV file, or a DataFrame with ``x``/``y``
+                columns indexed by marker ID.
+            pos_size_scale_fac: Multiplier applied to positions and sizes.
+            package_to_read_from: Python package to read resources from,
+                or ``None`` for filesystem reads.
+
+        Raises:
+            RuntimeError: If no markers can be read.
+            ValueError: If a marker ID exceeds the dictionary size.
+
+        """
         from . import aruco  # noqa: PLC0415
 
         # read in aruco marker positions
@@ -172,11 +270,21 @@ class Plane:
             self.markers[idx] = marker.Marker(idx, c, corners=[tl, tr, br, bl], rot=rot)
 
     def get_marker_ids(self) -> dict[str | int, list[marker.MarkerID]]:
-        """Return marker IDs for this plane grouped by plane name."""
+        """Return marker IDs for this plane keyed by ``"plane"``.
+
+        Returns:
+            Dict mapping ``"plane"`` to a list of ``MarkerID`` tuples.
+
+        """
         return {"plane": [marker.MarkerID(m_id, self.aruco_dict_id) for m_id in self._all_marker_ids]}
 
     def get_aruco_board(self) -> cv2.aruco.Board:
-        """Build an OpenCV ArUco Board from this plane's markers."""
+        """Build an OpenCV ``aruco.Board`` from this plane's marker corners.
+
+        Returns:
+            Board suitable for pose refinement via ``refineDetectedMarkers``.
+
+        """
         from . import aruco  # noqa: PLC0415
 
         board_corner_points = []
@@ -188,7 +296,13 @@ class Plane:
         return aruco.create_board(board_corner_points, ids, self.aruco_dict)
 
     def get_plane_setup(self) -> aruco.PlaneSetup:
-        """Return an ArUco PlaneSetup for this plane."""
+        """Return an ``aruco.PlaneSetup`` TypedDict for this plane.
+
+        Returns:
+            Setup dict containing the plane, detector parameters, and
+            minimum marker count.
+
+        """
         from . import aruco  # noqa: PLC0415
 
         return aruco.PlaneSetup(
@@ -198,11 +312,29 @@ class Plane:
         )
 
     def _store_reference_image(self, path: pathlib.Path, im_size: int) -> np.ndarray:
-        # get image with markers
+        """Generate a reference image with all markers rendered at their positions.
+
+        Creates a white image sized to the plane's aspect ratio, validates
+        that all marker corners lie within the plane bounds, converts marker
+        positions from plane units to pixel coordinates, and renders each
+        marker — using a direct blit for axis-aligned markers or an affine
+        warp for rotated ones.
+
+        Args:
+            path: Where to save the image, or ``None`` to skip saving.
+            im_size: Largest dimension in pixels.
+
+        Returns:
+            The generated BGR reference image.
+
+        Raises:
+            ValueError: If any marker corner falls outside the plane bounds.
+
+        """
         bbox_extents = [
             self.bbox[2] - self.bbox[0],
-            math.fabs(self.bbox[3] - self.bbox[1]),
-        ]  # math.fabs to deal with bboxes where (-,-) is bottom left
+            math.fabs(self.bbox[3] - self.bbox[1]),  # fabs handles bboxes where (-,-) is bottom left
+        ]
         aspect_ratio = bbox_extents[0] / bbox_extents[1]
         if aspect_ratio > 1:
             width = im_size
@@ -213,12 +345,11 @@ class Plane:
 
         img = np.zeros((height, width), np.uint8)
         img[:] = 255
-        # collect all markers
         corner_points = []
         ids = []
-        # for checking if markers fit
-        x_margin = bbox_extents[0] / width / 5  # ignore .2 pixel or less
-        y_margin = bbox_extents[1] / height / 5  # ignore .2 pixel or less
+        # sub-pixel tolerance for bounds checking (~0.2 pixel)
+        x_margin = bbox_extents[0] / width / 5
+        y_margin = bbox_extents[1] / height / 5
         for key in self.markers:
             ids.append(key)
             corners = np.vstack(self.markers[key].corners).astype("float32")
@@ -237,20 +368,17 @@ class Plane:
                 )
             corner_points.append(corners)
 
-        # get info about marker positions on the board
+        # shift corners so bbox origin is at (0,0), then scale to pixel coordinates
         corner_points = np.dstack(corner_points)
         corner_points -= np.expand_dims(np.array([self.bbox[:2]]), 2).astype("float32")
-
-        # get position and size of marker in the generated image
         corner_points[:, 0, :] = corner_points[:, 0, :] / bbox_extents[0] * float(img.shape[1])
         corner_points[:, 1, :] = corner_points[:, 1, :] / bbox_extents[1] * float(img.shape[0])
 
-        # get marker size
+        # compute marker size in pixels from edge lengths; use min to keep square
         pix_sz = np.vstack((
             np.hypot(corner_points[0, 0, :] - corner_points[1, 0, :], corner_points[0, 1, :] - corner_points[1, 1, :]),
             np.hypot(corner_points[1, 0, :] - corner_points[2, 0, :], corner_points[1, 1, :] - corner_points[2, 1, :]),
         )).T
-        # marker should be square
         pix_sz = np.round(np.min(pix_sz, 1)).astype("int")
 
         # place markers
@@ -292,7 +420,16 @@ class Plane:
 
 
 class TargetPlane(Plane):
-    """A plane with target points for gaze validation or calibration."""
+    """A ``Plane`` extended with target points for gaze validation or calibration.
+
+    Targets are loaded before the base ``Plane`` is initialized so that they
+    are already available when the reference image is generated (the overridden
+    ``_store_reference_image`` draws them on top of the markers).
+
+    Attributes:
+        targets: Target ``Marker`` objects keyed by target ID.
+
+    """
 
     def __init__(
         self,
@@ -309,8 +446,26 @@ class TargetPlane(Plane):
         ref_image_size: int = 1920,
         min_num_markers: int = 3,
     ) -> None:
-        """Initialize a target plane with marker and target positions."""
-        # get targets first, so that they can be drawn on the reference image
+        """Initialize a target plane with marker and target positions.
+
+        Args:
+            markers: Marker positions (see ``Plane.__init__``).
+            targets: Target positions as a path to a CSV file, or a DataFrame
+                with ``x`` and ``y`` columns indexed by target ID.
+            marker_size: Default marker side length in plane units.
+            plane_size: Width and height of the plane.
+            aruco_dict_id: OpenCV ArUco dictionary identifier.
+            marker_border_bits: Number of border bits around each marker.
+            pos_size_scale_fac: Multiplier for all positions and sizes.
+            unit: Measurement unit label (purely informational).
+            package_to_read_from: Python package for resource reads.
+            ref_image_store_path: Where to save the reference image.
+            ref_image_size: Largest dimension (pixels) of the reference image.
+            min_num_markers: Minimum markers for a valid pose estimate.
+
+        """
+        # targets must be loaded before super().__init__ so they can be drawn
+        # on the reference image
         self.targets: dict[int, marker.Marker] = {}
         self._load_targets(targets, pos_size_scale_fac, package_to_read_from)
 
@@ -330,7 +485,12 @@ class TargetPlane(Plane):
         )
 
     def set_origin(self, origin: Coordinate) -> None:
-        """Set the plane origin, also shifting all targets."""
+        """Set the plane origin, shifting all targets and then the base plane.
+
+        Args:
+            origin: New origin position on the current plane.
+
+        """
         for i in self.targets:
             self.targets[i].shift(-np.array(origin))
         super().set_origin(origin)
@@ -338,7 +498,22 @@ class TargetPlane(Plane):
     def _load_targets(
         self, targets: str | pathlib.Path | pd.DataFrame, pos_size_scale_fac: float, package_to_read_from: str | None
     ) -> None:
-        # read in target positions
+        """Load target positions and build ``Marker`` objects.
+
+        Only the ``center`` and optional ``color`` columns are kept; all
+        other columns are dropped.
+
+        Args:
+            targets: Path to a CSV file, or a DataFrame with ``x``/``y``
+                columns indexed by target ID.
+            pos_size_scale_fac: Multiplier applied to positions.
+            package_to_read_from: Python package for resource reads,
+                or ``None`` for filesystem reads.
+
+        Raises:
+            RuntimeError: If no targets can be read.
+
+        """
         if isinstance(targets, pd.DataFrame):
             target_pos = targets
         else:
@@ -356,11 +531,31 @@ class TargetPlane(Plane):
         }
 
     def get_target_ids(self) -> list[int]:
-        """Return the list of target IDs."""
+        """Return the list of target IDs.
+
+        Returns:
+            Target IDs in insertion order.
+
+        """
         return list(self.targets.keys())
 
     def _store_reference_image(self, path: pathlib.Path, im_size: int) -> np.ndarray:
-        # first call superclass method to generate image without targets
+        """Generate reference image with markers and target dots overlaid.
+
+        Calls the base class to render markers, then draws colored circles
+        at each target position.
+
+        Args:
+            path: Where to save the image, or ``None`` to skip saving.
+            im_size: Largest dimension in pixels.
+
+        Returns:
+            The generated BGR reference image.
+
+        Raises:
+            ValueError: If any target center falls outside the plane bounds.
+
+        """
         img = super()._store_reference_image(path, im_size)
         height, width = img.shape[:2]
 
@@ -380,14 +575,12 @@ class TargetPlane(Plane):
                     f"Target {key} positioned at ({center}) is outside the defined\nplane which ranges from ({plane_corners[0]}) to ({plane_corners[1]}). Ensure all\nsizes and positions are in the same unit (e.g. mm) and check the target position csv file and plane size."
                 )
 
-            # 1. determine position on image
             circle_pos = transforms.to_image_pos(*self.targets[key].center, self.bbox, [width, height])
-
-            # 2. draw
+            # convert matplotlib color to BGR (OpenCV order) with 0-255 range
             clr = tuple(
                 int(i * 255)
                 for i in (colors.to_rgb(self.targets[key].color)[::-1] if self.targets[key].color else (0.0, 0.0, 1.0))
-            )  # need BGR color ordering
+            )
             drawing.opencv_circle(img, circle_pos, 15, clr, -1, sub_pixel_fac)
 
         if path:

@@ -11,7 +11,26 @@ from . import annotation, data_files, drawing, intervals, marker, ocv, timestamp
 
 
 class Pose:
-    """Camera pose and homography for a single frame relative to a plane."""
+    """Camera pose and homography for a single frame relative to a plane.
+
+    Stores the results of PnP pose estimation (rotation vector, translation
+    vector, reprojection error) and/or a homography matrix.  Provides methods
+    for converting between camera frame, world (plane) frame, and image
+    coordinates.  Internally caches the rotation matrix and its inverse for
+    efficiency.
+
+    Attributes:
+        frame_idx: Video frame index.
+        pose_N_points: Number of image points used for the pose estimate;
+            ``0`` if no valid pose.
+        pose_reprojection_error: RMS reprojection error, or ``-1.0``.
+        pose_R_vec: Rodrigues rotation vector (3,), or ``None``.
+        pose_T_vec: Translation vector (3,), or ``None``.
+        homography_N_points: Number of image points used for the homography;
+            ``0`` if no valid homography.
+        homography_mat: 3x3 homography matrix, or ``None``.
+
+    """
 
     _columns_compressed: typing.ClassVar[dict[str, int]] = {
         "frame_idx": 1,
@@ -44,20 +63,31 @@ class Pose:
         homography_N_points: int = 0,
         homography_mat: np.ndarray | None = None,
     ) -> None:
-        """Initialize pose with frame index and optional pose/homography data."""
+        """Initialize pose with frame index and optional pose/homography data.
+
+        Args:
+            frame_idx: Video frame index.
+            pose_N_points: Number of image points used for the pose estimate
+                (4 per marker when using ArUco).  ``0`` means unavailable.
+            pose_reprojection_error: RMS reprojection error, or ``-1.0``.
+            pose_R_vec: Rodrigues rotation vector (3,).
+            pose_T_vec: Translation vector (3,).
+            homography_N_points: Number of image points used for the
+                homography.  ``0`` means unavailable.
+            homography_mat: 3x3 homography matrix (may be passed flat).
+
+        """
         self.frame_idx: int = frame_idx
-        # pose
-        self.pose_N_points: int = pose_N_points  # number of image points (4 per marker if based on ArUco markers) this pose estimate is based on. 0 if failed or otherwise not available
+        self.pose_N_points: int = pose_N_points
         self.pose_reprojection_error: float = pose_reprojection_error
         self.pose_R_vec: np.ndarray = pose_R_vec
         self.pose_T_vec: np.ndarray = pose_T_vec
-        # homography
-        self.homography_N_points: int = homography_N_points  # number of image points (4 per marker if based on ArUco markers) this homongraphy estimate is based on. 0 if failed or otherwise not available
+        self.homography_N_points: int = homography_N_points
         self.homography_mat: np.ndarray = (
             homography_mat.reshape(3, 3) if homography_mat is not None else homography_mat
         )
 
-        # internals
+        # lazily computed caches for rotation matrices and plane geometry
         self._RMat = None
         self._RtMat = None
         self._plane_normal = None
@@ -83,7 +113,20 @@ class Pose:
         sub_pixel_fac: int,
         position: list[float] | None = None,
     ) -> None:
-        """Draw coordinate axes on the image at the estimated pose location."""
+        """Draw 3D coordinate axes on the image at the estimated pose location.
+
+        Does nothing if pose vectors or camera intrinsics are unavailable.
+
+        Args:
+            img: Image to draw on (modified in-place).
+            camera_params: Camera intrinsic parameters.
+            arm_length: Length of each axis arm in world units.
+            thickness: Line thickness in pixels.
+            sub_pixel_fac: Sub-pixel rendering factor.
+            position: 3D origin point in world coordinates for the axes.
+                Defaults to ``[0, 0, 0]``.
+
+        """
         if position is None:
             position = [0.0, 0.0, 0.0]
         if (self.pose_R_vec is None) or (self.pose_T_vec is None) or not camera_params.has_intrinsics():
@@ -93,7 +136,16 @@ class Pose:
         )
 
     def cam_frame_to_world(self, point: np.ndarray) -> np.ndarray:
-        """Transform a point from camera frame to the plane's world frame."""
+        """Transform a 3D point from camera frame to the plane's world frame.
+
+        Args:
+            point: 3D point in camera coordinates.
+
+        Returns:
+            3D point in world (plane) coordinates, or NaN array if pose
+            is unavailable.
+
+        """
         if (self.pose_R_vec is None) or (self.pose_T_vec is None) or np.any(np.isnan(point)):
             return np.full((3,), np.nan)
 
@@ -107,7 +159,16 @@ class Pose:
         return np.matmul(self._RtMatInv, np.append(np.array(point), 1.0).reshape((4, 1))).flatten()
 
     def world_frame_to_cam(self, point: np.ndarray) -> np.ndarray:
-        """Transform a point from the plane's world frame to camera frame."""
+        """Transform a 3D point from the plane's world frame to camera frame.
+
+        Args:
+            point: 3D point in world (plane) coordinates.
+
+        Returns:
+            3D point in camera coordinates, or NaN array if pose
+            is unavailable.
+
+        """
         if (self.pose_R_vec is None) or (self.pose_T_vec is None) or np.any(np.isnan(point)):
             return np.full((3,), np.nan)
 
@@ -119,7 +180,16 @@ class Pose:
         return np.matmul(self._RtMat, np.append(np.array(point), 1.0).reshape((4, 1))).flatten()
 
     def plane_to_cam_pose(self, point_plane: np.ndarray, camera_params: ocv.CameraParams) -> np.ndarray:
-        """Project a 2D point on the plane to a 2D camera image location using pose."""
+        """Project a 3D point on the plane to a 2D camera image location using pose.
+
+        Args:
+            point_plane: 3D point in plane coordinates (z should be 0).
+            camera_params: Camera intrinsic parameters.
+
+        Returns:
+            2D image coordinates, or NaN array if pose is unavailable.
+
+        """
         if (self.pose_R_vec is None) or (self.pose_T_vec is None):
             return np.full((2,), np.nan)
         return transforms.project_points(
@@ -127,7 +197,22 @@ class Pose:
         ).flatten()
 
     def cam_to_plane_pose(self, point: np.ndarray, camera_params: ocv.CameraParams) -> tuple[np.ndarray, np.ndarray]:
-        """Project a 2D camera image point onto the plane using pose, returning plane coords and camera-space intersection."""
+        """Project a 2D camera image point onto the plane using pose.
+
+        Unprojects the image point to a 3D ray, intersects it with the plane
+        in camera space, then transforms the intersection to world coordinates.
+
+        Args:
+            point: 2D image coordinates.
+            camera_params: Camera intrinsic parameters.
+
+        Returns:
+            Tuple of ``(plane_xy, cam_intersection)`` where *plane_xy* is the
+            2D position on the plane and *cam_intersection* is the 3D
+            intersection point in camera space.  Both are NaN arrays if
+            pose or intrinsics are unavailable.
+
+        """
         if (
             (self.pose_R_vec is None)
             or (self.pose_T_vec is None)
@@ -138,17 +223,27 @@ class Pose:
 
         g_3d = transforms.unproject_points(point, camera_params)
 
-        # find intersection of 3D gaze with plane
-        pos_cam = self.vector_intersect(
-            g_3d
-        )  # default vec origin (0,0,0) because we use g_3d from camera's view point
+        # intersect the ray from the camera origin with the plane (in camera space)
+        pos_cam = self.vector_intersect(g_3d)
 
-        # above intersection is in camera space, turn into world space to get position on plane
-        (x, y, _z) = self.cam_frame_to_world(pos_cam)  # _z should be very close to zero
+        # convert camera-space intersection to plane coordinates; z should be ~0
+        (x, y, _z) = self.cam_frame_to_world(pos_cam)
         return np.asarray([x, y]), pos_cam
 
     def plane_to_cam_homography(self, point: np.ndarray, camera_params: ocv.CameraParams) -> np.ndarray:
-        """Project a 2D point on the plane to a 2D camera image location using homography."""
+        """Project a 2D plane point to a 2D camera image location using homography.
+
+        Uses the inverse homography, then re-applies distortion if intrinsics
+        are available.
+
+        Args:
+            point: 2D point in plane coordinates.
+            camera_params: Camera intrinsic parameters.
+
+        Returns:
+            2D image coordinates, or NaN array if homography is unavailable.
+
+        """
         if self.homography_mat is None:
             return np.full((2,), np.nan)
 
@@ -160,7 +255,19 @@ class Pose:
         return out
 
     def cam_to_plane_homography(self, point_cam: np.ndarray, camera_params: ocv.CameraParams) -> np.ndarray:
-        """Project a 2D camera image point onto the plane using homography."""
+        """Project a 2D camera image point onto the plane using homography.
+
+        Undistorts the image point if intrinsics are available, then applies
+        the homography.
+
+        Args:
+            point_cam: 2D image coordinates.
+            camera_params: Camera intrinsic parameters.
+
+        Returns:
+            2D plane coordinates, or NaN array if homography is unavailable.
+
+        """
         if self.homography_mat is None:
             return np.full((2,), np.nan)
 
@@ -169,11 +276,29 @@ class Pose:
         return transforms.apply_homography(point_cam, self.homography_mat).flatten()
 
     def get_origin_on_image(self, camera_params: ocv.CameraParams) -> np.ndarray:
-        """Return the plane origin projected onto the camera image."""
+        """Return the plane origin ``(0, 0)`` projected onto the camera image.
+
+        Args:
+            camera_params: Camera intrinsic parameters.
+
+        Returns:
+            2D image coordinates.
+
+        """
         return self.get_plane_point_on_image(np.zeros((1, 2)), camera_params)
 
     def get_plane_point_on_image(self, point: np.ndarray, camera_params: ocv.CameraParams) -> np.ndarray:
-        """Return a plane point projected onto the camera image, using pose or homography."""
+        """Project a plane point onto the camera image, preferring pose over homography.
+
+        Args:
+            point: 2D point in plane coordinates.
+            camera_params: Camera intrinsic parameters.
+
+        Returns:
+            2D image coordinates, or NaN array if neither pose nor
+            homography is available.
+
+        """
         if self.pose_successful() and camera_params.has_intrinsics():
             a = self.plane_to_cam_pose(np.append(np.array(point), 0.0), camera_params)
         elif self.homography_successful():
@@ -183,7 +308,21 @@ class Pose:
         return a
 
     def vector_intersect(self, vector: np.ndarray, origin: np.ndarray | None = None) -> np.ndarray:
-        """Find the intersection of a ray with the plane in camera space."""
+        """Find the intersection of a ray with the plane in camera space.
+
+        Lazily computes and caches the plane normal and a point on the plane
+        from the rotation and translation vectors.
+
+        Args:
+            vector: 3D ray direction (will be normalized internally).
+            origin: 3D ray origin.  Defaults to ``[0, 0, 0]`` (camera
+                origin).
+
+        Returns:
+            3D intersection point in camera space, or NaN array if pose
+            is unavailable.
+
+        """
         if origin is None:
             origin = np.array([0.0, 0.0, 0.0])
         if (self.pose_R_vec is None) or (self.pose_T_vec is None) or np.any(np.isnan(vector)):
@@ -210,12 +349,28 @@ class Pose:
 
 
 def read_dict_from_file(file_name: str | pathlib.Path, episodes: list[list[int]] | None = None) -> dict[int, Pose]:
-    """Read pose data from a TSV file into a dict keyed by frame index."""
+    """Read pose data from a TSV file into a dict keyed by frame index.
+
+    Args:
+        file_name: Path to the TSV file.
+        episodes: Optional frame-index intervals to restrict reading.
+
+    Returns:
+        Dict mapping frame index to ``Pose`` objects.
+
+    """
     return data_files.read_file(file_name, Pose, True, True, False, False, episodes=episodes)[0]
 
 
 def write_list_to_file(poses: list[Pose], file_name: str | pathlib.Path, skip_failed: bool = False) -> None:
-    """Write a list of Pose objects to a TSV file."""
+    """Write a list of ``Pose`` objects to a TSV file.
+
+    Args:
+        poses: Pose objects to write.
+        file_name: Output file path.
+        skip_failed: If ``True``, omit rows where all values are NaN.
+
+    """
     data_files.write_array_to_file(poses, file_name, Pose._columns_compressed, skip_all_nan=skip_failed)
 
 
@@ -231,7 +386,16 @@ _T = typing.TypeVar("_T")
 
 
 class Estimator:
-    """Video-based pose estimator that processes frames to detect planes and markers."""
+    """Video-based pose estimator that processes frames to detect planes and markers.
+
+    Plane detection functions, individual marker detection functions, and
+    extra processing functions are registered before processing begins.
+    Each registration can include processing intervals and an optional
+    visualizer callback.  The estimator then processes the video frame by
+    frame, invoking the registered functions for each frame that falls
+    within their defined intervals.
+
+    """
 
     def __init__(
         self,
@@ -239,7 +403,16 @@ class Estimator:
         frame_timestamp_file: str | pathlib.Path | timestamps.VideoTimestamps,
         camera_calibration_file: str | pathlib.Path | ocv.CameraParams,
     ) -> None:
-        """Initialize estimator with video, timestamps, and camera calibration."""
+        """Initialize estimator with video, timestamps, and camera calibration.
+
+        Args:
+            video_file: Path to the video file.
+            frame_timestamp_file: Per-frame timestamps, as a path or
+                pre-loaded ``VideoTimestamps``.
+            camera_calibration_file: Camera calibration, as a path or
+                pre-loaded ``CameraParams``.
+
+        """
         self.video_ts = (
             frame_timestamp_file
             if isinstance(frame_timestamp_file, timestamps.VideoTimestamps)
@@ -304,7 +477,22 @@ class Estimator:
         processing_intervals: tuple[annotation.EventType, list[int] | list[list[int]]] | None = None,
         plane_visualizer: typing.Callable[[str, int, np.ndarray, np.ndarray], None] | None = None,
     ) -> None:
-        """Register a plane detection function for video processing."""
+        """Register a plane detection function for video processing.
+
+        Args:
+            plane: Unique name for this plane.
+            plane_function: Callable that receives ``(plane_name, frame_idx,
+                frame, camera_params)`` and returns ``(object_points,
+                img_points)`` or ``None``.
+            processing_intervals: Frame intervals during which this plane
+                should be processed, or ``None`` for all frames.
+            plane_visualizer: Optional callback for drawing detection results.
+
+        Raises:
+            RuntimeError: If called after processing has started.
+            ValueError: If *plane* is already registered.
+
+        """
         if not self._first_frame:
             raise RuntimeError("You cannot register planes once video processing has started")
         if plane in self.plane_functions:
@@ -322,7 +510,23 @@ class Estimator:
         processing_intervals: tuple[annotation.EventType, list[int] | list[list[int]]] | None = None,
         individual_marker_visualizer: typing.Callable[[str, int, np.ndarray, np.ndarray], None] | None = None,
     ) -> None:
-        """Register an individual marker detection function for video processing."""
+        """Register an individual marker detection function for video processing.
+
+        Args:
+            key: Unique identifier for this marker.
+            individual_marker_function: Callable that receives ``(key,
+                frame_idx, frame, camera_params)`` and returns
+                ``(object_points, img_points)``.
+            processing_intervals: Frame intervals during which this marker
+                should be processed, or ``None`` for all frames.
+            individual_marker_visualizer: Optional callback for drawing
+                detection results.
+
+        Raises:
+            RuntimeError: If called after processing has started.
+            ValueError: If *key* is already registered.
+
+        """
         if not self._first_frame:
             raise RuntimeError("You cannot register individual markers once video processing has started")
         if key in self.individual_marker_functions:
@@ -339,7 +543,21 @@ class Estimator:
         func_parameters: dict[str, typing.Any],
         visualizer: typing.Callable[[str, np.ndarray, int, typing.Any], None],
     ) -> None:
-        """Register an extra processing function for video processing."""
+        """Register an extra processing function for video processing.
+
+        Args:
+            name: Unique name for this processing function.
+            processing_intervals: Frame intervals, or ``None`` for all frames.
+            func: Callable that receives ``(name, frame_idx, frame,
+                camera_params, **func_parameters)``.
+            func_parameters: Keyword arguments passed to *func*.
+            visualizer: Optional callback for drawing processing results.
+
+        Raises:
+            RuntimeError: If called after processing has started.
+            ValueError: If *name* is already registered.
+
+        """
         if not self._first_frame:
             raise RuntimeError("You cannot register extra processing functions once video processing has started")
         if name in self.extra_proc_functions:
@@ -350,19 +568,35 @@ class Estimator:
         self.extra_proc_visualizers[name] = visualizer
 
     def set_allow_early_exit(self, allow_early_exit: bool) -> None:
-        """Set whether processing stops after the last defined interval."""
+        """Set whether processing stops after the last defined interval.
+
+        Args:
+            allow_early_exit: If ``False``, process all frames regardless
+                of interval boundaries.
+
+        """
         self.allow_early_exit = allow_early_exit
 
     def set_progress_updater(self, progress_updater: typing.Callable[[], None]) -> None:
-        """Set the callback invoked after each frame is processed."""
+        """Set the callback invoked after each frame is processed.
+
+        Args:
+            progress_updater: Zero-argument callback.
+
+        """
         self.progress_updater = progress_updater
 
     def set_visualize_on_frame(self, do_visualize: bool) -> None:
-        """Enable or disable drawing detections on frames during processing."""
+        """Enable or disable drawing detections on frames during processing.
+
+        Args:
+            do_visualize: Whether to draw on frames.
+
+        """
         self.do_visualize = do_visualize
 
     def get_video_info(self) -> tuple[int, int, float]:
-        """Return video width, height, and FPS."""
+        """Return video ``(width, height, fps)``."""
         return (
             int(self.video.get_prop(cv2.CAP_PROP_FRAME_WIDTH)),
             int(self.video.get_prop(cv2.CAP_PROP_FRAME_HEIGHT)),
@@ -372,15 +606,48 @@ class Estimator:
     def estimate_pose(
         self, object_points: np.ndarray, img_points: np.ndarray, flags: int = cv2.SOLVEPNP_ITERATIVE
     ) -> tuple[int, np.ndarray, np.ndarray, float]:
-        """Estimate camera pose from object-image point correspondences."""
+        """Estimate camera pose using this estimator's camera parameters.
+
+        Delegates to the module-level :func:`estimate_pose`.
+
+        Args:
+            object_points: Nx3 array of 3D object points.
+            img_points: Nx1x2 array of 2D image points.
+            flags: OpenCV PnP solver flag.
+
+        Returns:
+            Tuple of ``(n_points, r_vec, t_vec, reprojection_error)``.
+
+        """
         return estimate_pose(object_points, img_points, self.cam_params, flags)
 
     def estimate_homography(self, object_points: np.ndarray, img_points: np.ndarray) -> tuple[int, np.ndarray]:
-        """Estimate homography from object-image point correspondences."""
+        """Estimate homography using this estimator's camera parameters.
+
+        Delegates to the module-level :func:`estimate_homography`.
+
+        Args:
+            object_points: Nx3 array of 3D object points.
+            img_points: Nx1x2 array of 2D image points.
+
+        Returns:
+            Tuple of ``(n_points, homography_matrix)``.
+
+        """
         return estimate_homography(object_points, img_points, self.cam_params)
 
     def estimate_pose_and_homography(self, frame_idx: int, object_points: np.ndarray, img_points: np.ndarray) -> Pose:
-        """Estimate both camera pose and homography for a single frame."""
+        """Estimate both camera pose and homography for a single frame.
+
+        Args:
+            frame_idx: Video frame index.
+            object_points: Nx3 array of 3D object points.
+            img_points: Nx1x2 array of 2D image points.
+
+        Returns:
+            ``Pose`` populated with both pose and homography results.
+
+        """
         pose = Pose(frame_idx)
         if (
             object_points is not None and img_points is not None and img_points.shape[0] >= 4
@@ -403,7 +670,22 @@ class Estimator:
         dict[str, tuple[int, typing.Any]],
         tuple[np.ndarray, int, float],
     ]:
-        """Process a single video frame, returning status, poses, markers, extras, and frame data."""
+        """Process a single video frame.
+
+        Reads the next (or a specific) frame, determines which registered
+        planes, individual markers, and extra processing functions should
+        run based on their intervals, executes detection and pose estimation,
+        and optionally visualizes the results on the frame.
+
+        Args:
+            wanted_frame_idx: Frame index to process.  ``None`` reads the
+                next sequential frame.
+
+        Returns:
+            A 5-tuple ``(status, poses, markers, extras, frame_data)``
+            where *frame_data* is ``(frame, frame_idx, frame_ts)``.
+
+        """
         if wanted_frame_idx is not None and self._cache is not None and self._cache[4][1] == wanted_frame_idx:
             return self._cache
 
@@ -529,7 +811,17 @@ class Estimator:
     def process_video(
         self,
     ) -> tuple[dict[str, list[Pose]], dict[_T, list[marker.Pose]], dict[str, list[tuple[int, typing.Any]]]]:
-        """Process the entire video, returning accumulated poses, markers, and extra outputs."""
+        """Process the entire video from start to finish.
+
+        Calls :meth:`process_one_frame` in a loop until finished, collecting
+        all successful results.
+
+        Returns:
+            Tuple of ``(poses, individual_markers, extra_processing)`` where
+            each is a dict keyed by registered name/key with lists of per-frame
+            results.
+
+        """
         poses_out: dict[str, list[Pose]] = {p: [] for p in self.plane_functions}
         individual_markers_out: dict[_T, list[marker.Pose]] = {i: [] for i in self.individual_marker_functions}
         extra_processing_out: dict[str, list[tuple[int, typing.Any]]] = {e: [] for e in self.extra_proc_functions}
@@ -556,11 +848,26 @@ def estimate_pose(
     cam_params: ocv.CameraParams,
     flags: int = cv2.SOLVEPNP_ITERATIVE,
 ) -> tuple[int, np.ndarray, np.ndarray, float]:
-    """Estimate camera pose via PnP, returning point count, rotation, translation, and reprojection error."""
+    """Estimate camera pose via PnP from object-image point correspondences.
+
+    For cameras with OpenCV intrinsics, uses ``solvePnPGeneric`` directly.
+    For non-OpenCV cameras (e.g. COLMAP-only), unprojects to an identity
+    camera space first, then solves PnP and computes reprojection error
+    manually.
+
+    Args:
+        object_points: Nx3 array of 3D object points.
+        img_points: Nx1x2 array of corresponding 2D image points.
+        cam_params: Camera intrinsic parameters.
+        flags: OpenCV PnP solver flag.
+
+    Returns:
+        Tuple of ``(n_points, r_vec, t_vec, reprojection_error)`` where
+        *n_points* is ``0`` if estimation failed or was not possible.
+
+    """
     n_points, r_vec, t_vec, reprojection_error = 0, None, None, -1.0
-    if (
-        object_points is None or not cam_params.has_intrinsics() or object_points.shape[0] < 4
-    ):  # minimum 4 points needed
+    if object_points is None or not cam_params.has_intrinsics() or object_points.shape[0] < 4:
         return n_points, r_vec, t_vec, reprojection_error
 
     if cam_params.has_opencv_camera():
@@ -576,8 +883,8 @@ def estimate_pose(
         n_points = object_points.shape[0] if n_solutions else 0
         reprojection_error = reprojection_error[0][0]
     else:
-        # we have a camera not supported by OpenCV
-        # undistort points and project to a identity camera space, so we can use opencv functionality
+        # non-OpenCV camera (e.g. COLMAP-only): unproject to 3D, then re-project
+        # through an identity camera so solvePnPGeneric can be used
         points_w = transforms.unproject_points(img_points, cam_params)
         points_cam = transforms.project_points(
             points_w, ocv.CameraParams(cam_params.resolution, np.identity(3), np.zeros((5, 1)))
@@ -591,7 +898,8 @@ def estimate_pose(
             np.empty(1),
             flags=flags,
         )
-        # need to compute reprojection error ourselves, output of solvePnPGeneric is meaningless due to arbitrary camera point units
+        # solvePnPGeneric's error is meaningless here (identity camera units);
+        # recompute against original image points using the real camera model
         if n_points:
             proj_points = transforms.project_points(object_points, cam_params, rot_vec=r_vec[0], trans_vec=t_vec[0])
             reprojection_error = cv2.norm(
@@ -605,9 +913,23 @@ def estimate_pose(
 def estimate_homography(
     object_points: np.ndarray, img_points: np.ndarray, cam_params: ocv.CameraParams
 ) -> tuple[int, np.ndarray]:
-    """Estimate homography from object-image correspondences, returning point count and matrix."""
+    """Estimate homography from object-image point correspondences.
+
+    Undistorts image points if camera intrinsics are available before
+    computing the homography.
+
+    Args:
+        object_points: Nx3 array of 3D object points.
+        img_points: Nx1x2 array of corresponding 2D image points.
+        cam_params: Camera intrinsic parameters.
+
+    Returns:
+        Tuple of ``(n_points, homography_matrix)`` where *n_points* is
+        ``0`` if estimation failed.
+
+    """
     n_points, h = 0, None
-    if object_points is None or object_points.shape[0] < 4:  # minimum 4 points needed
+    if object_points is None or object_points.shape[0] < 4:
         return n_points, h
 
     # use undistorted marker corners if possible
