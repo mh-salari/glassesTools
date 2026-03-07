@@ -1,22 +1,25 @@
-# this script requires the following python packages:
-# pip install projectaria-tools moviepy==1.0.3 pycolmap ffmpeg-binaries pandas opencv-python-headless
-import os
-import datetime
-import json
-import numpy as np
-import pandas as pd
-import cv2
-import pycolmap
-import itertools
+"""Export Meta Aria Gen 1 VRS recordings to glassesTools-compatible format.
 
-from projectaria_tools.core import calibration, data_provider, mps, sophus
-from projectaria_tools.core.sensor_data import TimeDomain
-from projectaria_tools.core.stream_id import StreamId
-from projectaria_tools.core.mps import MpsDataPathsProvider
-from projectaria_tools.utils.vrs_to_mp4_utils import convert_vrs_to_mp4
+Requires: pip install projectaria-tools moviepy==1.0.3 pycolmap ffmpeg-binaries pandas opencv-python-headless
+"""
+
+import datetime
+import itertools
+import json
+import pathlib
+
+import cv2
 
 # ensure ffmpeg binaries are on path
 import ffmpeg
+import numpy as np
+import pandas as pd
+import pycolmap
+from projectaria_tools.core import calibration, data_provider, mps, sophus
+from projectaria_tools.core.mps import MpsDataPathsProvider
+from projectaria_tools.core.sensor_data import TimeDomain
+from projectaria_tools.core.stream_id import StreamId
+from projectaria_tools.utils.vrs_to_mp4_utils import convert_vrs_to_mp4
 
 ffmpeg.add_to_path()
 
@@ -64,7 +67,8 @@ print(
 )
 
 
-def image_config(config):
+def image_config(config: data_provider.ImageConfiguration) -> None:
+    """Print image stream configuration details."""
     print(f"  device_type {config.device_type}")
     print(f"  device_version {config.device_version}")
     print(f"  device_serial {config.device_serial}")
@@ -84,17 +88,16 @@ print("Information about eye tracking image stream:")
 image_config(et_config)
 
 # extract mp4 from vrs file
-vrs_path_components = os.path.split(vrs_file)
-vrs_file_stem = os.path.splitext(vrs_path_components[-1])[0]
-if output_folder is None:
-    output_folder = os.path.join(*vrs_path_components[0:-1], f"export_{vrs_file_stem}")
-if not os.path.isdir(output_folder):
-    os.mkdir(output_folder)
-convert_vrs_to_mp4(vrs_file, os.path.join(output_folder, "worldCamera.mp4"))
+vrs_path = pathlib.Path(vrs_file)
+vrs_file_stem = vrs_path.stem
+output_folder = vrs_path.parent / f"export_{vrs_file_stem}" if output_folder is None else pathlib.Path(output_folder)
+if not output_folder.is_dir():
+    output_folder.mkdir()
+convert_vrs_to_mp4(vrs_file, str(output_folder / "worldCamera.mp4"))
 
 # get MPS output
 if mps_folder is None:
-    mps_folder = os.path.join(*vrs_path_components[0:-1], f"mps_{vrs_file_stem}_vrs")
+    mps_folder = str(vrs_path.parent / f"mps_{vrs_file_stem}_vrs")
 mps_data_paths = MpsDataPathsProvider(mps_folder)
 eye_gaze_path_general = (
     mps_data_paths.get_data_paths().eyegaze.general_eyegaze
@@ -120,9 +123,7 @@ T_device_rgb_camera = device_calibration.get_transform_device_sensor(
     provider.get_label_from_stream_id(rgb_id), True
 )  # True to get CAD-based transform, as per code from projectaria_tools and feedback from Meta
 if make_upright:
-    T_device_rgb_camera = T_device_rgb_camera @ sophus.SE3.from_matrix(
-        np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-    )
+    T_device_rgb_camera @= sophus.SE3.from_matrix(np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]))
 T_rgb_camera_cpf = T_device_rgb_camera.inverse() @ T_device_CPF
 
 # get camera calibration in colmap format
@@ -159,7 +160,7 @@ camera_info = {
 camera_info["colmap_camera"]["model"] = camera_info["colmap_camera"]["model"].name
 camera_info["colmap_camera"]["has_prior_focal_length"] = int(camera_info["colmap_camera"]["has_prior_focal_length"])
 # store to file
-fs = cv2.FileStorage(os.path.join(output_folder, "calibration.xml"), cv2.FILE_STORAGE_WRITE)
+fs = cv2.FileStorage(str(output_folder / "calibration.xml"), cv2.FILE_STORAGE_WRITE)
 for key, value in camera_info.items():
     if isinstance(value, dict):
         fs.startWriteStruct("colmap_camera", cv2.FileNode_MAP)
@@ -172,33 +173,32 @@ fs.release()
 
 # get gaze data to export
 samples: list[np.ndarray] = []
-for i, (s, s_g) in enumerate(itertools.zip_longest(gaze_cpf, gaze_cpf_general)):
+for s, s_g in itertools.zip_longest(gaze_cpf, gaze_cpf_general):
     # try to use general gaze if we have personalized gaze but its nan
-    if np.isnan(s.yaw) and s_g is not None:
-        s = s_g
+    sample = s_g if np.isnan(s.yaw) and s_g is not None else s
     # get 3D binocular gaze point
     binocular_gaze_point_cpf = mps.get_eyegaze_point_at_depth(
-        s.yaw, s.pitch, s.depth or 1.0
+        sample.yaw, sample.pitch, sample.depth or 1.0
     )  # If depth available use it, else fall back to 1 meter depth along the EyeGaze ray
     # get gaze position on camera image
     binocular_gaze_point_rgb_camera = T_rgb_camera_cpf @ binocular_gaze_point_cpf
     gaze_position_rgb_camera = cam_cal.img_from_cam(np.reshape(binocular_gaze_point_rgb_camera, (1, 3)))
     # get gaze vectors
-    gaze_vectors = mps.get_gaze_vectors(s.vergence.left_yaw, s.vergence.right_yaw, s.pitch)
+    gaze_vectors = mps.get_gaze_vectors(sample.vergence.left_yaw, sample.vergence.right_yaw, sample.pitch)
     # get origins of gaze vectors (convert from m to mm)
     gaze_ori = (
         np.array([
-            s.vergence.tx_left_eye,
-            s.vergence.ty_left_eye,
-            s.vergence.tz_left_eye,
-            s.vergence.tx_right_eye,
-            s.vergence.ty_right_eye,
-            s.vergence.tz_right_eye,
+            sample.vergence.tx_left_eye,
+            sample.vergence.ty_left_eye,
+            sample.vergence.tz_left_eye,
+            sample.vergence.tx_right_eye,
+            sample.vergence.ty_right_eye,
+            sample.vergence.tz_right_eye,
         ])
         * 1000.0
     )
     # get timestamp, in relative video time
-    ts = s.tracking_timestamp / datetime.timedelta(microseconds=1) - int(rgb_start_time / 1000)
+    ts = sample.tracking_timestamp / datetime.timedelta(microseconds=1) - int(rgb_start_time / 1000)
     # store (convert binocular gaze point from m to mm)
     samples.append(
         np.concatenate((
@@ -234,7 +234,7 @@ gaze_df = pd.DataFrame(
         "gaze_ori_right_z",
     ],
 )
-gaze_df.to_csv(os.path.join(output_folder, "gaze.tsv"), sep="\t", float_format="%.8f", index=False, na_rep="nan")
+gaze_df.to_csv(output_folder / "gaze.tsv", sep="\t", float_format="%.8f", index=False, na_rep="nan")
 
 # finally, get meta data
 md = provider.get_metadata()
@@ -245,14 +245,14 @@ metadata["duration"] = int((max(et_start_time, et_end_time) - min(rgb_start_time
 metadata["scene_camera_serial"] = rgb_config.sensor_serial
 metadata["name"] = vrs_file_stem
 # can get some extra metadata from vrs's json file, if present
-vrs_json_file = vrs_file + ".json"
-if os.path.isfile(vrs_json_file):
-    with open(vrs_json_file, "r") as f:
+vrs_json_file = pathlib.Path(str(vrs_path) + ".json")
+if vrs_json_file.is_file():
+    with vrs_json_file.open(encoding="utf-8") as f:
         md2 = json.load(f)
     if "firmware_version" in md2:
         metadata["firmware_version"] = md2["firmware_version"]
-    if "companion_version" in md2 and md2["companion_version"]:
+    if md2.get("companion_version"):
         metadata["recording_software_version"] = md2["companion_version"]
 
-with open(os.path.join(output_folder, "metadata.json"), "w") as f:
+with (output_folder / "metadata.json").open("w", encoding="utf-8") as f:
     json.dump(metadata, f)
