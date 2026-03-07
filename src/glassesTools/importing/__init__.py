@@ -14,7 +14,7 @@ import pathlib
 import pandas as pd
 import polars as pl
 
-from .. import eyetracker, naming
+from .. import eyetracker, naming, video_utils
 from ..eyetracker import EyeTracker
 from ..recording import Recording
 from .adhawk_mindlink import preprocess_data as adhawk_mindlink
@@ -274,6 +274,7 @@ def do_import(
     source_dir_as_relative_path: bool = False,
     cam_cal_file: str | pathlib.Path | None = None,
     device_name: str | None = None,
+    ensure_web_audio: bool = False,
 ) -> Recording:
     """Unified front end for importing a recording from any supported device.
 
@@ -291,6 +292,8 @@ def do_import(
         cam_cal_file: Path to an external camera calibration file. Only honored
             for AdHawk MindLink, Argus ETVision, SeeTrue STONE, Generic, and VPS devices.
         device_name: Custom device name, only used for ``EyeTracker.Generic``.
+        ensure_web_audio: If True, re-encode non-AAC audio in the scene video to
+            AAC for Safari/WebKit compatibility.
 
     Returns:
         The populated Recording object written to output_dir.
@@ -423,6 +426,11 @@ def do_import(
             )
         case _:
             raise RuntimeError(f'Not implemented for "{device.value}", contact developer')
+
+    if ensure_web_audio:
+        scene_video = output_dir / f"{naming.scene_camera_video_fname_stem}.mp4"
+        if scene_video.is_file():
+            video_utils.ensure_web_compatible_audio(scene_video)
 
     return rec_info
 

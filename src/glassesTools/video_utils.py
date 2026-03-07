@@ -1,6 +1,7 @@
 """Video file parsing, timestamp extraction, and frame-number mapping."""
 
 import pathlib
+import shutil
 import subprocess
 
 import cv2
@@ -330,3 +331,77 @@ def timestamps_to_frame_number(
         df = df.convert_dtypes()  # turn into int64 again
 
     return df
+
+
+def ensure_web_compatible_audio(video_path: str | pathlib.Path) -> bool:
+    """Re-encode non-AAC audio in an mp4 file to AAC for Safari/WebKit compatibility.
+
+    Safari and WKWebView cannot play mp3 audio inside mp4 containers.
+    This function checks the audio codec and transcodes to AAC if needed,
+    keeping the video stream untouched.
+
+    Args:
+        video_path: Path to the mp4 video file.
+
+    Returns:
+        True if transcoding was performed, False if not needed or not possible.
+
+    """
+    video_path = pathlib.Path(video_path)
+    if not video_path.is_file():
+        return False
+
+    if shutil.which("ffprobe") is None or shutil.which("ffmpeg") is None:
+        return False
+
+    # check current audio codec
+    result = subprocess.run(
+        [  # noqa: S607
+            "ffprobe",
+            "-loglevel",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "csv=p=0",
+            str(video_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    codec = result.stdout.strip()
+    if not codec or codec == "aac":
+        return False
+
+    # transcode audio to AAC, keep video as-is
+    temp_path = video_path.with_stem(video_path.stem + "_aac_temp")
+    ret = subprocess.run(
+        [  # noqa: S607
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(video_path),
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            str(temp_path),
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if ret.returncode == 0 and temp_path.is_file():
+        temp_path.replace(video_path)
+        return True
+
+    # clean up on failure
+    temp_path.unlink(missing_ok=True)
+    return False
