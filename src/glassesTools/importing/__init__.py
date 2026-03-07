@@ -180,7 +180,7 @@ def VPS_Lite(
 
 def get_recording_info(
     source_dir: str | pathlib.Path, device: str | EyeTracker, device_name: str | None = None
-) -> list[Recording]:
+) -> list[Recording] | None:
     """Retrieve recording metadata from a source directory for a given device type.
 
     Dispatches to the device-specific ``get_recording_info`` implementation,
@@ -428,7 +428,7 @@ def do_import(
 
 
 def check_source_dir(
-    source_dir: str | pathlib.Path, rec_info: Recording | None
+    source_dir: str | pathlib.Path | None, rec_info: Recording | None
 ) -> tuple[pathlib.Path, Recording | None]:
     """Validate and resolve source_dir, cross-checking with rec_info if provided.
 
@@ -465,7 +465,7 @@ def check_source_dir(
 
 
 def check_output_dir(
-    output_dir: str | pathlib.Path, rec_info: Recording | None
+    output_dir: str | pathlib.Path | None, rec_info: Recording | None
 ) -> tuple[pathlib.Path, Recording | None]:
     """Validate and resolve output_dir, ensuring it is empty if it exists.
 

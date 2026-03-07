@@ -88,20 +88,20 @@ class Gaze:
 
         # Original values preserved before data_files.read_file overwrites
         # the main timestamp/frame_idx with a preferred clock variant
-        self.timestamp_ori: float = timestamp_ori
-        self.frame_idx_ori: int = frame_idx_ori
+        self.timestamp_ori: float | None = timestamp_ori
+        self.frame_idx_ori: int | None = frame_idx_ori
         # Alternative clock sources for multi-recording synchronization
-        self.timestamp_VOR: float = timestamp_VOR
-        self.frame_idx_VOR: int = frame_idx_VOR
-        self.timestamp_ref: float = timestamp_ref
-        self.frame_idx_ref: int = frame_idx_ref
+        self.timestamp_VOR: float | None = timestamp_VOR
+        self.frame_idx_VOR: int | None = frame_idx_VOR
+        self.timestamp_ref: float | None = timestamp_ref
+        self.frame_idx_ref: int | None = frame_idx_ref
 
         self.gaze_pos_vid: np.ndarray = gaze_pos_vid
-        self.gaze_pos_3d: np.ndarray = gaze_pos_3d
-        self.gaze_dir_l: np.ndarray = gaze_dir_l
-        self.gaze_ori_l: np.ndarray = gaze_ori_l
-        self.gaze_dir_r: np.ndarray = gaze_dir_r
-        self.gaze_ori_r: np.ndarray = gaze_ori_r
+        self.gaze_pos_3d: np.ndarray | None = gaze_pos_3d
+        self.gaze_dir_l: np.ndarray | None = gaze_dir_l
+        self.gaze_ori_l: np.ndarray | None = gaze_ori_l
+        self.gaze_dir_r: np.ndarray | None = gaze_dir_r
+        self.gaze_ori_r: np.ndarray | None = gaze_ori_r
 
     def draw(
         self,

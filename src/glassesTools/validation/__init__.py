@@ -49,6 +49,7 @@ class Plane(_plane.TargetPlane):
 
         # get marker width
         if self.config["mode"] == "deg":
+            # 1° visual angle at viewing distance (cm) converted to mm
             self.cell_size_mm = 2.0 * math.tan(math.radians(0.5)) * self.config["distance"] * 10
         else:
             self.cell_size_mm = 10  # 1cm
@@ -63,7 +64,7 @@ class Plane(_plane.TargetPlane):
         self.dynamic_markers: dict[
             int, tuple[int, int]
         ] = {}  # {marker ID: (target ID, marker_N column in target file)} (keep latter around for good error reporting)
-        self._dynamic_markers_cache: dict[int, _marker.MarkerID] = (
+        self._dynamic_markers_cache: dict[int, _marker.MarkerID] | None = (
             None  # different format, for efficient return from get_marker_ids()
         )
         targets, origin = self._get_targets(config_dir, self.config, is_dynamic)

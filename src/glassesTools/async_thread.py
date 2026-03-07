@@ -6,9 +6,9 @@ import threading
 import time
 import typing
 
-loop: asyncio.AbstractEventLoop = None
-thread: threading.Thread = None
-done_callback: typing.Callable = None
+loop: asyncio.AbstractEventLoop | None = None
+thread: threading.Thread | None = None
+done_callback: typing.Callable | None = None
 
 
 def setup(enable_asyncio_debug: bool = False) -> None:

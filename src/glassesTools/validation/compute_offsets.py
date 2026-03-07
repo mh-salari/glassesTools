@@ -85,7 +85,7 @@ def compute(
     targets_for_homography = {t_id: np.append(targets[t_id][0:2], distance_mm_for_homography) for t_id in targets}
 
     # for output
-    out_df: pd.DataFrame = None
+    out_df: pd.DataFrame | None = None
 
     # for each frame during analysis interval, determine offset
     # (angle) of gaze (each eye) to each of the targets

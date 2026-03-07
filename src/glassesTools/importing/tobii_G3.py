@@ -318,6 +318,7 @@ def json2df(json_file: str | pathlib.Path, scene_video_dimensions: list[int]) ->
         A DataFrame indexed by timestamp (ms) with gaze data columns.
 
     """
+    # file contains one JSON object per line; wrap into a JSON array for parsing
     entries = json.loads("[" + pathlib.Path(json_file).read_text(encoding="utf-8").replace("\n", ",")[:-1] + "]")
 
     # json no longer needed, remove
@@ -356,6 +357,7 @@ def json2df(json_file: str | pathlib.Path, scene_video_dimensions: list[int]) ->
     df[data_files.get_column_labels("gaze_pos_vid", 2)] = pd.DataFrame(
         expander(df_r["data.gaze2d"].tolist(), 2), index=df_r.index
     )
+    # convert normalized [0,1] gaze coordinates to pixel coordinates
     df.loc[:, "gaze_pos_vid_x"] *= scene_video_dimensions[0]
     df.loc[:, "gaze_pos_vid_y"] *= scene_video_dimensions[1]
 

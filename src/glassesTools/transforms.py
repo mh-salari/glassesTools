@@ -144,7 +144,7 @@ def estimate_homography_known_marker(
 
 def estimate_homography(
     obj_points: list[np.ndarray] | np.ndarray, img_points: list[np.ndarray] | np.ndarray
-) -> np.ndarray:
+) -> np.ndarray | None:
     """Estimate a homography mapping image points to object points.
 
     Args:

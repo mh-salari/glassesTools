@@ -372,7 +372,7 @@ def check_recording(input_dir: str | pathlib.Path, rec_info: Recording) -> None:
             )
 
 
-def get_camera_from_msg_pack(input_dir: str | pathlib.Path, output_dir: str | pathlib.Path) -> list[int]:
+def get_camera_from_msg_pack(input_dir: str | pathlib.Path, output_dir: str | pathlib.Path) -> np.ndarray:
     """Read Pupil Core camera calibration from a msgpack intrinsics file.
 
     Reads ``world.intrinsics``, renames fields to OpenCV conventions,
@@ -401,7 +401,7 @@ def get_camera_from_msg_pack(input_dir: str | pathlib.Path, output_dir: str | pa
 
 def get_camera_cal_from_bin_file(
     input_dir: str | pathlib.Path, output_dir: str | pathlib.Path, rec_info: Recording
-) -> list[int]:
+) -> np.ndarray:
     """Read camera calibration from the binary ``calibration.bin`` file.
 
     The binary format differs between Pupil Invisible (3x3 extrinsics)
@@ -465,7 +465,7 @@ def get_camera_cal_from_bin_file(
 
 def get_camera_cal_from_online(
     input_dir: str | pathlib.Path, output_dir: str | pathlib.Path, rec_info: Recording
-) -> list[int]:
+) -> np.ndarray:
     """Download camera calibration from the Pupil Labs cloud API.
 
     Uses the device serial number to fetch calibration data from
@@ -512,7 +512,7 @@ def get_camera_cal_from_online(
 
 def get_camera_cal_from_cloud_export(
     input_dir: str | pathlib.Path, output_dir: str | pathlib.Path, rec_info: Recording
-) -> list[int] | None:
+) -> np.ndarray | None:
     """Read camera calibration from a Pupil Cloud export's ``scene_camera.json``.
 
     Handles both ``dist_coefs`` and ``distortion_coefficients`` key names
@@ -781,7 +781,7 @@ def read_gaze_data_pupil_player(
         "gaze y [px]": "gaze_pos_vid_y",
     }
     df = df.rename(columns=lookup)
-    # reorder
+    # reorder columns to match lookup order, deduplicating via walrus + set
     seen = set()
     idx = [v for k in lookup if (v := lookup[k]) in df.columns and not (v in seen or seen.add(v))]
     idx.extend([x for x in df.columns if x not in idx])  # append columns not in lookup

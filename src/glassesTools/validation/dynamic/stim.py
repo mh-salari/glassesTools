@@ -144,8 +144,8 @@ def read_coord_file(file: str) -> pd.DataFrame:
     )
 
 
-_aruco_dict: cv2.aruco.Dictionary = None
-_aruco_border_bits: int = None
+_aruco_dict: cv2.aruco.Dictionary | None = None
+_aruco_border_bits: int | None = None
 
 
 def load_aruco_dict(aruco_dict_name: str, border_bits: int) -> None:
@@ -223,9 +223,11 @@ def get_aruco_marker(m_id: int, size: float, units: str, win: visual.Window) -> 
     """
     if _aruco_dict is None or _aruco_border_bits is None:
         raise RuntimeError("You must call load_aruco_dict() before you try to load an ArUco marker")
+    # convert from PsychoPy units to pixel width by computing the span of [-size/2, size/2]
     size = tools.monitorunittools.convertToPix(np.array([-0.5 * size, 0.5 * size]), np.array([0.0, 0.0]), units, win)
     size = int(size[1] - size[0])
-    # NB: flipud because PsychoPy draws images loaded from memory upside down
+    # flipud because PsychoPy draws memory images upside down;
+    # normalize from [0, 255] to [-1, 1] for PsychoPy's image convention
     return np.flipud(
         cv2.aruco.generateImageMarker(_aruco_dict, m_id, size, borderBits=_aruco_border_bits).astype(np.float32)
         / 255.0

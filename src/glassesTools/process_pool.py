@@ -111,8 +111,8 @@ class ProcessPool:
         self.auto_cleanup_if_no_work = False
 
         # NB: pool is only started in run() once needed
-        self._pool: pebble.pool.ProcessPool = None
-        self._jobs: dict[int, PoolJob] = None
+        self._pool: pebble.pool.ProcessPool | None = None
+        self._jobs: dict[int, PoolJob] | None = None
         self._job_id_provider: CounterContext = CounterContext()
         self._lock: threading.Lock = threading.Lock()
 

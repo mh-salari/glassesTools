@@ -37,6 +37,7 @@ if not provider:
     print("Invalid vrs data provider")
 
 print("The following streams are present in this recording:")
+# Aria hardware stream IDs for the RGB scene camera and eye tracking camera
 rgb_id = StreamId("214-1")
 et_id = StreamId("211-1")
 have_rgb, have_et = False, False
@@ -123,6 +124,7 @@ T_device_rgb_camera = device_calibration.get_transform_device_sensor(
     provider.get_label_from_stream_id(rgb_id), True
 )  # True to get CAD-based transform, as per code from projectaria_tools and feedback from Meta
 if make_upright:
+    # 90° CW rotation around Z to match the upright video produced by convert_vrs_to_mp4()
     T_device_rgb_camera @= sophus.SE3.from_matrix(np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]))
 T_rgb_camera_cpf = T_device_rgb_camera.inverse() @ T_device_CPF
 

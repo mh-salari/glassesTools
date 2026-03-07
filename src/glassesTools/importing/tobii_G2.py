@@ -352,6 +352,7 @@ def json2df(json_file: str | pathlib.Path, scene_video_dimensions: list[int]) ->
     vts_sync: list[tuple[int, int]] = []  # scene video timestamp sync
     gaze_data: dict[int, dict[str, float]] = {}  # gaze data
 
+    # file contains one JSON object per line; wrap into a JSON array for parsing
     entries = json.loads("[" + pathlib.Path(json_file).read_text(encoding="utf-8").replace("\n", ",")[:-1] + "]")
 
     # loop over all lines in json file, each line represents unique json object
@@ -403,7 +404,7 @@ def json2df(json_file: str | pathlib.Path, scene_video_dimensions: list[int]) ->
             gaze_data[entry["ts"]]["gaze_pos_3d_y"] = entry["gp3"][1] if not is_error else math.nan
             gaze_data[entry["ts"]]["gaze_pos_3d_z"] = entry["gp3"][2] if not is_error else math.nan
 
-    # find out t0 for video in gaze time
+    # find gaze-clock timestamp where video time is 0 (latest sync point with vts==0)
     vts_sync = np.array(vts_sync)
     t0 = max([vts_sync[vts_sync[:, 1] == 0, 0]])
 

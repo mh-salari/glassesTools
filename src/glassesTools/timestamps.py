@@ -102,7 +102,7 @@ class VideoTimestamps:
         self.timestamp_dict: dict[int, float] = {}
         self.indices: list[int] = []
         self.timestamps: list[float] = []
-        self._ifi: float = None
+        self._ifi: float | None = None
 
         df = pd.read_csv(file_name, delimiter="\t", index_col="frame_idx")
         # Dict for O(1) frame→timestamp lookup (includes -1 sentinel rows)
@@ -114,9 +114,9 @@ class VideoTimestamps:
         self.indices = df["frame_idx"].to_list()
         self.timestamps = df["timestamp"].to_list()
 
-        self.timestamp_stretched_dict: dict[int, float] = None
-        self.timestamps_stretched: list[float] = None
-        self._ifi_stretched: float = None
+        self.timestamp_stretched_dict: dict[int, float] | None = None
+        self.timestamps_stretched: list[float] | None = None
+        self._ifi_stretched: float | None = None
         self.has_stretched = "timestamp_stretched" in df.columns
         if self.has_stretched:
             self.timestamp_stretched_dict = df.to_dict()["timestamp_stretched"]

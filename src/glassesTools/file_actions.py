@@ -41,10 +41,10 @@ class DirEntry:
     name: str
     is_dir: bool
     full_path: pathlib.Path
-    ctime: float
-    mtime: float
-    size: int
-    mime_type: str
+    ctime: float | None
+    mtime: float | None
+    size: int | None
+    mime_type: str | None
     extra: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:

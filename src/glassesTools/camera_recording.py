@@ -35,7 +35,7 @@ class Recording:
     video_file: str
     source_directory: pathlib.Path
     working_directory: pathlib.Path = ""
-    duration: float = None
+    duration: float | None = None
 
     def store_as_json(self, path: str | pathlib.Path) -> None:
         """Serialize recording metadata to a JSON file.

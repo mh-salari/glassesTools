@@ -21,7 +21,7 @@ class Recording:
     source_directory: pathlib.Path = ""
     working_directory: pathlib.Path = ""
     start_time: Timestamp = dataclasses.field(default_factory=lambda: Timestamp(0))
-    duration: float = None
+    duration: float | None = None
     eye_tracker: EyeTracker = EyeTracker.Unknown
     eye_tracker_name: str = ""  # name to show if eye_tracker is EyeTracker.Generic
     project: str = ""

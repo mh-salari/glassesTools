@@ -80,10 +80,10 @@ class Pose:
         self.frame_idx: int = frame_idx
         self.pose_N_points: int = pose_N_points
         self.pose_reprojection_error: float = pose_reprojection_error
-        self.pose_R_vec: np.ndarray = pose_R_vec
-        self.pose_T_vec: np.ndarray = pose_T_vec
+        self.pose_R_vec: np.ndarray | None = pose_R_vec
+        self.pose_T_vec: np.ndarray | None = pose_T_vec
         self.homography_N_points: int = homography_N_points
-        self.homography_mat: np.ndarray = (
+        self.homography_mat: np.ndarray | None = (
             homography_mat.reshape(3, 3) if homography_mat is not None else homography_mat
         )
 
@@ -605,7 +605,7 @@ class Estimator:
 
     def estimate_pose(
         self, object_points: np.ndarray, img_points: np.ndarray, flags: int = cv2.SOLVEPNP_ITERATIVE
-    ) -> tuple[int, np.ndarray, np.ndarray, float]:
+    ) -> tuple[int, np.ndarray | None, np.ndarray | None, float]:
         """Estimate camera pose using this estimator's camera parameters.
 
         Delegates to the module-level :func:`estimate_pose`.
@@ -621,7 +621,7 @@ class Estimator:
         """
         return estimate_pose(object_points, img_points, self.cam_params, flags)
 
-    def estimate_homography(self, object_points: np.ndarray, img_points: np.ndarray) -> tuple[int, np.ndarray]:
+    def estimate_homography(self, object_points: np.ndarray, img_points: np.ndarray) -> tuple[int, np.ndarray | None]:
         """Estimate homography using this estimator's camera parameters.
 
         Delegates to the module-level :func:`estimate_homography`.
@@ -847,7 +847,7 @@ def estimate_pose(
     img_points: np.ndarray,
     cam_params: ocv.CameraParams,
     flags: int = cv2.SOLVEPNP_ITERATIVE,
-) -> tuple[int, np.ndarray, np.ndarray, float]:
+) -> tuple[int, np.ndarray | None, np.ndarray | None, float]:
     """Estimate camera pose via PnP from object-image point correspondences.
 
     For cameras with OpenCV intrinsics, uses ``solvePnPGeneric`` directly.
@@ -912,7 +912,7 @@ def estimate_pose(
 
 def estimate_homography(
     object_points: np.ndarray, img_points: np.ndarray, cam_params: ocv.CameraParams
-) -> tuple[int, np.ndarray]:
+) -> tuple[int, np.ndarray | None]:
     """Estimate homography from object-image point correspondences.
 
     Undistorts image points if camera intrinsics are available before

@@ -68,9 +68,9 @@ class VideoMaker:
             gaze_data_file if isinstance(gaze_data_file, dict) else gaze_headref.read_dict_from_file(gaze_data_file)[0]
         )
 
-        self._cache: tuple[Status, tuple[np.ndarray, int, float]] = None  # self._cache[1][1] is frame number
+        self._cache: tuple[Status, tuple[np.ndarray, int, float]] | None = None  # self._cache[1][1] is frame number
 
-        self.progress_updater: typing.Callable[[], None] = None
+        self.progress_updater: typing.Callable[[], None] | None = None
 
         self.sub_pixel_fac = 8
 

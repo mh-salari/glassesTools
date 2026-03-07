@@ -169,7 +169,7 @@ def _get_isobmmf_timestamps(vid_file: pathlib.Path) -> np.ndarray | None:
     return (dts + empty_duration) / media_time_scale * 1000
 
 
-def _get_frame_timestamps_ffprobe(vid_file: pathlib.Path) -> np.array:
+def _get_frame_timestamps_ffprobe(vid_file: pathlib.Path) -> np.ndarray | None:
     """Extract frame timestamps via ffprobe, returned in milliseconds."""
     command = [
         "ffprobe",
@@ -193,7 +193,7 @@ def _get_frame_timestamps_ffprobe(vid_file: pathlib.Path) -> np.array:
     return np.sort(np.fromiter(map(float, out.split()), "float")) * 1000.0  # s -> ms
 
 
-def _get_frame_timestamps_opencv(vid_file: pathlib.Path) -> np.array:
+def _get_frame_timestamps_opencv(vid_file: pathlib.Path) -> np.ndarray:
     """Extract frame timestamps via OpenCV's ``CAP_PROP_POS_MSEC``, in milliseconds."""
     vid = cv2.VideoCapture(vid_file)
     nframes = float(vid.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -228,7 +228,7 @@ def _get_frame_timestamps_opencv(vid_file: pathlib.Path) -> np.array:
     return np.array(frame_ts)
 
 
-def _get_frame_timestamps_from_video(vid_file: pathlib.Path) -> np.array:
+def _get_frame_timestamps_from_video(vid_file: pathlib.Path) -> np.ndarray | None:
     """Get frame timestamps using the best available method for the file type."""
     if is_isobmmf(vid_file):
         ts = _get_isobmmf_timestamps(vid_file)
