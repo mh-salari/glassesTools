@@ -1,4 +1,16 @@
-"""Annotation types and event registry for marking temporal points and intervals in recordings."""
+"""Annotation types and event registry for marking temporal points and intervals in recordings.
+
+Each annotation event has an ``EventType`` (e.g. Validate, Trial, Sync_Camera) and is classified
+as either a ``Point`` (single timestamp) or ``Interval`` (start/end pair). Some event types are
+internal — generated programmatically (e.g. Target from marker detection, Fixation from fixation
+classification) — while others are user-annotated via the GUI.
+
+Downstream code registers concrete ``Event`` instances into a global ``EVENT_REGISTRY``, which
+controls ordering and lookup. Annotations are stored as nested interval lists
+(``[[start, end], ...]``) but can be flattened to ``[start, end, ...]`` for processing and
+timeline display, with ``flatten_annotation_dict`` / ``unflatten_annotation_dict`` handling
+the conversion.
+"""
 
 import dataclasses
 from enum import Enum, auto
@@ -27,6 +39,8 @@ class EventType(utils.AutoName):
 
 
 event_types = list(EventType)
+# JSON round-trip: serializes as "EventType.Validate", so the deserializer
+# splits on "." to extract the member name for getattr lookup.
 json.register_type(
     json.TypeEntry(EventType, "__enum.Event__", utils.enum_val_2_str, lambda x: getattr(EventType, x.split(".")[1]))
 )
@@ -40,6 +54,8 @@ type_map = {
     EventType.Fixation: Type.Interval,
 }
 
+# Internal types are not user-annotated — they are generated programmatically
+# (e.g. by target detection or fixation classification algorithms).
 internal_types = {EventType.Target, EventType.Fixation}
 
 tooltip_map = {
@@ -73,7 +89,12 @@ EVENT_REGISTRY: list[Event] = []
 
 
 def register_event(entry: Event) -> None:
-    """Add an annotation event to the global registry."""
+    """Add an annotation event to the global registry.
+
+    Args:
+        entry: The event to register.
+
+    """
     EVENT_REGISTRY.append(entry)
 
 
@@ -83,7 +104,15 @@ def unregister_all_annotation_types() -> None:
 
 
 def get_events_by_type(event_type: EventType) -> list[Event]:
-    """Return all registered events matching the given event type."""
+    """Return all registered events matching the given event type.
+
+    Args:
+        event_type: The event type to filter by.
+
+    Returns:
+        List of matching registered events.
+
+    """
     return [e for e in EVENT_REGISTRY if e.event_type == event_type]
 
 
@@ -93,21 +122,31 @@ def flatten_annotation_dict(
     """Flatten nested interval lists into a single flat list per annotation.
 
     Converts ``{name: (type, [[start, end], ...])}`` to ``{name: (type, [start, end, ...])}``.
+
+    Args:
+        annotations: Dict mapping event names to ``(EventType, nested_list)`` tuples.
+
+    Returns:
+        Dict with the same keys but flat timestamp lists.
+
     """
     annotations_flat: dict[str, tuple[EventType, list[int]]] = {}
 
     def _copy_flat_annotation(
         annotations: tuple[EventType, list[list[int]]],
     ) -> tuple[EventType, list[int]]:
+        # Guard: data may already be flat (list of ints) if it was never nested
         if annotations[1] and isinstance(annotations[1][0], list):
             return (annotations[0], [i for iv in annotations[1] for i in iv])
         return (annotations[0], annotations[1].copy())
 
-    for e in EVENT_REGISTRY:  # iterate over this for consistent ordering
+    # Two-loop pattern: first pass uses EVENT_REGISTRY order for deterministic
+    # output ordering, second pass catches any annotations not in the registry
+    # (e.g. from plugins or newer event types).
+    for e in EVENT_REGISTRY:
         if e.name not in annotations:
             continue
         annotations_flat[e.name] = _copy_flat_annotation(annotations[e.name])
-    # add anything still missing
     for e_name, e_val in annotations.items():
         if e_name not in annotations_flat:
             annotations_flat[e_name] = _copy_flat_annotation(e_val)
@@ -121,6 +160,14 @@ def unflatten_annotation_dict(
 
     Converts ``{name: (type, [start, end, ...])}`` to ``{name: (type, [[start, end], ...])}``.
     If *add_incomplete_intervals* is True, a trailing unpaired value is kept as ``[start]``.
+
+    Args:
+        annotations: Dict mapping event names to ``(EventType, flat_list)`` tuples.
+        add_incomplete_intervals: Whether to keep a trailing unpaired start timestamp.
+
+    Returns:
+        Dict with the same keys but nested interval pair lists.
+
     """
     annotations_unflat: dict[str, tuple[EventType, list[list[int]]]] = {}
 
@@ -128,17 +175,21 @@ def unflatten_annotation_dict(
         annotations: tuple[EventType, list[int]],
     ) -> tuple[EventType, list[list[int]]]:
         if type_map[annotations[0]] == Type.Interval:
+            # Pair consecutive timestamps into [start, end] intervals
             result = (annotations[0], [annotations[1][m : m + 2] for m in range(0, len(annotations[1]) - 1, 2)])
+            # An odd number of timestamps means a trailing start without an end
+            # (e.g. user started an interval but hasn't closed it yet)
             if add_incomplete_intervals and len(annotations[1]) % 2 == 1:
                 result[1].append([annotations[1][-1]])
             return result
+        # Point-type annotations: wrap each individual timestamp in a list
         return (annotations[0], [[tp] for tp in annotations[1]])
 
-    for e in EVENT_REGISTRY:  # iterate over this for consistent ordering
+    # Same two-loop pattern as flatten: registry first for ordering, then remainder
+    for e in EVENT_REGISTRY:
         if e.name not in annotations:
             continue
         annotations_unflat[e.name] = _copy_unflat_annotation(annotations[e.name])
-    # add anything still missing
     for e_name, e_val in annotations.items():
         if e_name not in annotations_unflat:
             annotations_unflat[e_name] = _copy_unflat_annotation(e_val)
