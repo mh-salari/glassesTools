@@ -1,3 +1,5 @@
+"""Validation configuration file reading and parsing."""
+
 import importlib.resources
 import pathlib
 import typing
@@ -10,30 +12,31 @@ from ... import aruco as _aruco
 from ... import data_files as _data_files
 
 
-def _read_glassesValidator_config_file(file):
-    # read key=value pairs into dict
+def _read_glasses_validator_config_file(file: typing.IO[str]) -> dict[str, str]:
+    """Read key=value pairs from a glassesValidator config file into a dict."""
     lexer = shlex(file)
     lexer.whitespace += "="
     lexer.wordchars += (
         ".[],"  # don't split extensions of filenames in the input file, and accept stuff from python list syntax
     )
     lexer.commenters = "%"
-    return dict(zip(lexer, lexer))
+    return dict(zip(lexer, lexer, strict=False))
 
 
-_default_poster_package = ".".join(__package__.split(".")[:-1] + ["default_poster"])
+_default_poster_package = ".".join([*__package__.split(".")[:-1], "default_poster"])
 
 
 def get_validation_setup(
-    config_dir: str | pathlib.Path = None, config_file: str = "validationSetup.txt"
+    config_dir: str | pathlib.Path | None = None, config_file: str = "validationSetup.txt"
 ) -> dict[str, typing.Any]:
+    """Read and parse a validation setup config file, falling back to defaults if no config_dir."""
     if config_dir is not None:
         with (pathlib.Path(config_dir) / config_file).open() as f:
-            validation_config = _read_glassesValidator_config_file(f)
+            validation_config = _read_glasses_validator_config_file(f)
     else:
         # fall back on default config included with package
         with importlib.resources.open_text(_default_poster_package, config_file) as f:
-            validation_config = _read_glassesValidator_config_file(f)
+            validation_config = _read_glasses_validator_config_file(f)
 
     # parse numerics into int or float
     for key, val in validation_config.items():
@@ -42,7 +45,7 @@ def get_validation_setup(
         else:
             try:
                 validation_config[key] = float(val)
-            except:
+            except ValueError:
                 pass  # just keep value as a string
     # backwards compatibility
     if "arucoDictionary" not in validation_config:
@@ -59,12 +62,18 @@ def _read_coord_file(config_dir: str | pathlib.Path | None, file: str, package: 
 
 
 def get_targets(
-    config_dir: str | pathlib.Path = None, file="targetPositions.csv", package=_default_poster_package
+    config_dir: str | pathlib.Path | None = None,
+    file: str = "targetPositions.csv",
+    package: str = _default_poster_package,
 ) -> pd.DataFrame | None:
+    """Read target positions from config directory or default package."""
     return _read_coord_file(config_dir, file, package)
 
 
 def get_markers(
-    config_dir: str | pathlib.Path = None, file="markerPositions.csv", package=_default_poster_package
+    config_dir: str | pathlib.Path | None = None,
+    file: str = "markerPositions.csv",
+    package: str = _default_poster_package,
 ) -> pd.DataFrame | None:
+    """Read marker positions from config directory or default package."""
     return _read_coord_file(config_dir, file, package)

@@ -1,5 +1,6 @@
+"""PsychoPy stimulus script for dynamic validation with ArUco markers."""
+
 import json
-import os
 import pathlib
 import random
 import traceback
@@ -12,9 +13,18 @@ from psychopy import core, event, monitors, tools, visual
 
 
 class ABCFixPoint:
+    """ABC-style fixation point with crosshair pattern."""
+
     def __init__(
-        self, win, outer_diameter=0.7, inner_diameter=0.1, outer_color="black", inner_color="white", units="degFlatPos"
-    ):
+        self,
+        win: visual.Window,
+        outer_diameter: float = 0.7,
+        inner_diameter: float = 0.1,
+        outer_color: str = "black",
+        inner_color: str = "white",
+        units: str = "degFlatPos",
+    ) -> None:
+        """Initialize fixation point components."""
         self.outer_dot = visual.Circle(win, fillColor=outer_color, radius=outer_diameter / 2, units=units)
         self.inner_dot = visual.Circle(win, fillColor=outer_color, radius=inner_diameter / 2, units=units)
         self.line_vertical = visual.Rect(
@@ -24,24 +34,29 @@ class ABCFixPoint:
             win, fillColor=inner_color, width=outer_diameter, height=inner_diameter, units=units
         )
 
-    def set_size(self, size: float):
+    def set_size(self, size: float) -> None:
+        """Set the outer diameter of the fixation point."""
         self.outer_dot.radius = size / 2
         self.line_vertical.size = (self.line_vertical.width, size)
         self.line_horizontal.size = (size, self.line_horizontal.height)
 
-    def set_pos(self, pos):
+    def set_pos(self, pos: list[float]) -> None:
+        """Set position of all fixation point components."""
         self.outer_dot.pos = pos
         self.inner_dot.pos = pos
         self.line_vertical.pos = pos
         self.line_horizontal.pos = pos
 
-    def get_pos(self):
+    def get_pos(self) -> list[float]:
+        """Return current position."""
         return self.outer_dot.pos
 
-    def get_size(self):
+    def get_size(self) -> list[float]:
+        """Return current size."""
         return self.outer_dot.size
 
-    def draw(self):
+    def draw(self) -> None:
+        """Draw all fixation point components."""
         self.outer_dot.draw()
         self.line_vertical.draw()
         self.line_horizontal.draw()
@@ -49,6 +64,8 @@ class ABCFixPoint:
 
 
 class SegmentationMarker:
+    """ArUco marker displayed to segment validation intervals."""
+
     def __init__(
         self,
         win: visual.Window,
@@ -58,7 +75,8 @@ class SegmentationMarker:
         units: str,
         margin: float,
         background_color: str,
-    ):
+    ) -> None:
+        """Initialize segmentation marker display."""
         self.win = win
         self.refresh_rate = refresh_rate
         self.duration = duration
@@ -76,7 +94,8 @@ class SegmentationMarker:
             fillColor=self.background_color,
         )
 
-    def draw(self, m_id: int):
+    def draw(self, m_id: int) -> None:
+        """Display the segmentation marker for the configured duration."""
         check_escape(self.win)
         self._marker.image = get_aruco_marker(m_id, self.size, self.units, self.win)
         n_segment_marker_frames = int(self.duration * self.refresh_rate)
@@ -86,7 +105,8 @@ class SegmentationMarker:
             self.win.flip()
 
 
-def read_coord_file(file):
+def read_coord_file(file: str) -> pd.DataFrame:
+    """Read a CSV coordinate file and return a DataFrame indexed by ID."""
     return (
         pd
         .read_csv(file, dtype=defaultdict(lambda: np.float32, ID="int32", color="str"))
@@ -99,7 +119,8 @@ _aruco_dict: cv2.aruco.Dictionary = None
 _aruco_border_bits: int = None
 
 
-def load_aruco_dict(aruco_dict_name: str, border_bits: int):
+def load_aruco_dict(aruco_dict_name: str, border_bits: int) -> None:
+    """Load a predefined ArUco dictionary for marker generation."""
     global _aruco_dict, _aruco_border_bits
     str_to_dict: dict[str, int] = {
         k: getattr(cv2.aruco, k)
@@ -141,9 +162,10 @@ def load_aruco_dict(aruco_dict_name: str, border_bits: int):
     _aruco_border_bits = border_bits
 
 
-def get_aruco_marker(m_id: int, size: float, units: str, win: visual.Window):
+def get_aruco_marker(m_id: int, size: float, units: str, win: visual.Window) -> np.ndarray:
+    """Generate an ArUco marker image scaled to the given size and window."""
     if _aruco_dict is None or _aruco_border_bits is None:
-        RuntimeError("You must call load_aruco_dict() before you try to load an ArUco marker")
+        raise RuntimeError("You must call load_aruco_dict() before you try to load an ArUco marker")
     size = tools.monitorunittools.convertToPix(np.array([-0.5 * size, 0.5 * size]), np.array([0.0, 0.0]), units, win)
     size = int(size[1] - size[0])
     # NB: flipud because PsychoPy draws images loaded from memory upside down
@@ -155,29 +177,31 @@ def get_aruco_marker(m_id: int, size: float, units: str, win: visual.Window):
     )
 
 
-def check_escape(win: visual.Window):
+def check_escape(win: visual.Window) -> None:
+    """Close and quit if escape key was pressed."""
     if "escape" in event.getKeys():
         win.close()
         core.quit()
 
 
-def prepare_validation(win: visual.Window, config: dict, screen_config: dict):
+def prepare_validation(win: visual.Window, config: dict, _screen_config: dict) -> dict:
+    """Create background with ArUco markers and target placeholders."""
     # get markers and target positions
     target_positions = read_coord_file(config["targets"]["file"])
     fiducial_positions = read_coord_file(config["markers"]["file"])
 
     # check there are no overlapping ArUco markers
-    indicator_IDs = []
+    indicator_ids = []
     for ri, _ in enumerate(config["markers"]["replace_IDs"]):
         off = config["markers"]["replace_ID_start"] + ri * config["markers"]["replace_ID_offset"]
-        indicator_IDs += [i + off for i in target_positions.index]
-    if duplicates := set(indicator_IDs) & set(fiducial_positions.index):
+        indicator_ids += [i + off for i in target_positions.index]
+    if duplicates := set(indicator_ids) & set(fiducial_positions.index):
         raise ValueError(
-            f"For the current setup, marker IDs specified in marker file {config['markers']['file']} would also appear as target indicator markers. Adapt the marker positions file or config->markers->replace_ID_start, config->markers->replace_ID_offset and replace_IDs. Duplicates: {sorted(list(duplicates))}."
+            f"For the current setup, marker IDs specified in marker file {config['markers']['file']} would also appear as target indicator markers. Adapt the marker positions file or config->markers->replace_ID_start, config->markers->replace_ID_offset and replace_IDs. Duplicates: {sorted(duplicates)}."
         )
 
     # Create a background with ArUco markers and circle placeholders where target will appear
-    stimList = []
+    stim_list = []
     # draw all ArUco markers
     # NB ArUco markers are drawn using the 'deg' and not the 'degFlatPos' coordinate system so
     # that these markers are evenly spaced and not more eccentric than necessary
@@ -195,8 +219,7 @@ def prepare_validation(win: visual.Window, config: dict, screen_config: dict):
         aruco_im.image = get_aruco_marker(m_id, config["markers"]["size"], config["markers"]["units"], win)
         aruco_im.pos = [marker.x, marker.y]
 
-        stimList.append(aruco_bg)
-        stimList.append(aruco_im)
+        stim_list.extend((aruco_bg, aruco_im))
 
         aruco_bg.draw()
         aruco_im.draw()
@@ -213,17 +236,20 @@ def prepare_validation(win: visual.Window, config: dict, screen_config: dict):
                 fillColor=target.color if use_file_color else config["targets"]["placeholder"]["color"],
             )
             circle.pos = [target.x, target.y]
-            stimList.append(circle)
+            stim_list.append(circle)
             circle.draw()
 
     # Get screenshot of background, so that we can draw unchanging things at once
     background = visual.ImageStim(
-        win, visual.BufferImageStim(win, stim=stimList).image
+        win, visual.BufferImageStim(win, stim=stim_list).image
     )  # because https://github.com/psychopy/psychopy/issues/840
     return {"background": background, "target_positions": target_positions, "fiducial_positions": fiducial_positions}
 
 
-def show_validation(win: visual.Window, config: dict, refresh_rate: int, task_vars: dict, last_pos=None):
+def show_validation(
+    win: visual.Window, config: dict, refresh_rate: int, task_vars: dict, last_pos: np.ndarray | None = None
+) -> np.ndarray:
+    """Animate fixation targets and indicator markers for one validation pass."""
     # prepare visual objects
     fixation_target = ABCFixPoint(
         win,
@@ -250,7 +276,7 @@ def show_validation(win: visual.Window, config: dict, refresh_rate: int, task_va
         )
     ts = [t for t in task_vars["target_positions"].index.to_list() if t != config["targets"]["first_ID"]]
     random.shuffle(ts)
-    targets = [config["targets"]["first_ID"]] + ts
+    targets = [config["targets"]["first_ID"], *ts]
 
     # prepare task parameters
     n_shrink_frames = int(config["targets"]["shrink"]["duration"] * refresh_rate)
@@ -285,19 +311,24 @@ def show_validation(win: visual.Window, config: dict, refresh_rate: int, task_va
         n_move_frames = int(move_duration * refresh_rate)
         if config["targets"]["move"]["move_with_acceleration"]:
             accel = 0 if not d else d / (move_duration / 2) ** 2  # solve x=.5*a*t^2 for a, use d/2 for x
-            moveVec = [0.0, 0.0] if not d else [(x - y) / d for x, y in zip(pos, old_pos)]
+            move_vec = [0.0, 0.0] if not d else [(x - y) / d for x, y in zip(pos, old_pos, strict=True)]
 
-            def calc_pos(frac):
+            def calc_pos(frac: float) -> list[float]:
                 if frac < 0.5:
-                    return [p + m * 0.5 * accel * (frac * move_duration) ** 2 for p, m in zip(old_pos, moveVec)]
+                    return [
+                        p + m * 0.5 * accel * (frac * move_duration) ** 2
+                        for p, m in zip(old_pos, move_vec, strict=True)
+                    ]
                 # implement deceleration by accelerating from the other side in backward time
-                return [p - m * 0.5 * accel * ((1 - frac) * move_duration) ** 2 for p, m in zip(pos, moveVec)]
+                return [
+                    p - m * 0.5 * accel * ((1 - frac) * move_duration) ** 2 for p, m in zip(pos, move_vec, strict=True)
+                ]
 
             tar_pos = [calc_pos(x) for x in np.linspace(0.0, 1.0, n_move_frames)]
         else:
             x_tar_pos = np.linspace(old_pos[0], pos[0], n_move_frames)
             y_tar_pos = np.linspace(old_pos[1], pos[1], n_move_frames)
-            tar_pos = [[x, y] for x, y in zip(x_tar_pos, y_tar_pos)]
+            tar_pos = [[x, y] for x, y in zip(x_tar_pos, y_tar_pos, strict=True)]
 
         # two markers indicate which target is shown (two for redundancy)
         for ri, r in enumerate(config["markers"]["replace_IDs"]):
@@ -334,7 +365,8 @@ def show_validation(win: visual.Window, config: dict, refresh_rate: int, task_va
     return old_pos
 
 
-def run_validation(win: visual.Window, config: dict):
+def run_validation(win: visual.Window, config: dict) -> None:
+    """Run the full dynamic validation sequence."""
     # prepare fiducials
     load_aruco_dict(config["aruco"]["dict"], config["aruco"]["border_bits"])
 
@@ -396,9 +428,10 @@ def run_validation(win: visual.Window, config: dict):
             core.wait(1.0)
 
 
-def main():
+def main() -> None:
+    """Entry point: load config and run the validation stimulus."""
     # read protocol setup
-    with pathlib.Path("setup.json").open() as fp:
+    with pathlib.Path("setup.json").open(encoding="utf-8") as fp:
         config = json.load(fp)
 
     try:
@@ -419,7 +452,7 @@ def main():
             infoMsg="",
         )
         win.mouseVisible = False
-        if not all((x == y for x, y in zip(win.size, config["screen"]["resolution"]))):
+        if not all((x == y for x, y in zip(win.size, config["screen"]["resolution"], strict=True))):
             raise RuntimeError(f"expected resolution of {config['screen']['resolution']}, but got {win.size}")
         if (
             1 / win.monitorFramePeriod < config["screen"]["refresh_rate"] - 2
@@ -440,5 +473,7 @@ def main():
 
 
 if __name__ == "__main__":
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    import os
+
+    os.chdir(pathlib.Path(__file__).resolve().parent)
     main()

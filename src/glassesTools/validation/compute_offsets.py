@@ -1,3 +1,5 @@
+"""Compute gaze-to-target angular offsets for validation."""
+
 import math
 import pathlib
 import warnings
@@ -18,9 +20,10 @@ def compute(
     output_directory: str | pathlib.Path,
     filename: str = naming.validation_offset_fname,
     d_types: list[data_types.DataType] | None = None,
-    allow_data_type_fallback=False,
-    include_data_loss=False,
-):
+    allow_data_type_fallback: bool = False,
+    include_data_loss: bool = False,
+) -> None:
+    """Compute accuracy/precision metrics for each target and write results to TSV."""
     output_directory = pathlib.Path(output_directory)
     if d_types is None:
         d_types = []
@@ -93,7 +96,7 @@ def compute(
             df["order"] = df["order"].astype(np.int64)
 
         # now compute
-        for t in targets:
+        for t, target_pos in targets.items():
             if (idx + 1, t) not in marker_intervals.index:
                 continue
             frame_idxs = [k for k, v in samples_per_frame.items() for _ in v]
@@ -113,13 +116,16 @@ def compute(
                     ori = np.zeros((ts.shape[0], 3))
                 else:
                     ori = np.vstack([getattr(s, fields[0]) for v in samples_per_frame.values() for s in v])
-                gazePlane = np.vstack([getattr(s, fields[2]) for v in samples_per_frame.values() for s in v])
+                gaze_plane = np.vstack([getattr(s, fields[2]) for v in samples_per_frame.values() for s in v])
                 if fields[1] is None:
                     if not dt == data_types.DataType.viewpos_vidpos_homography:
                         raise NotImplementedError(
                             "This field should be set, is a special case not implemented? Contact developer"
                         )
-                    gaze = np.hstack((gazePlane[:, 0:2], np.full((gazePlane.shape[0], 1), distance_mm_for_homography)))
+                    gaze = np.hstack((
+                        gaze_plane[:, 0:2],
+                        np.full((gaze_plane.shape[0], 1), distance_mm_for_homography),
+                    ))
                 else:
                     gaze = np.vstack([getattr(s, fields[1]) for v in samples_per_frame.values() for s in v])
 
@@ -132,24 +138,24 @@ def compute(
                     frame_idx = frame_idxs[i]
                     if dt == data_types.DataType.viewpos_vidpos_homography:
                         # get vectors based on assumed viewing distance (from config), without using pose info
-                        vGaze = gaze[i, :]
-                        vTarget = targets_for_homography[t]
+                        v_gaze = gaze[i, :]
+                        v_target = targets_for_homography[t]
                     else:
                         # use 3D vectors known given pose information
                         if frame_idx not in poses:
                             continue
                         if frame_idx not in target_cam:
-                            target_cam[frame_idx] = poses[frame_idx].world_frame_to_cam(targets[t])
+                            target_cam[frame_idx] = poses[frame_idx].world_frame_to_cam(target_pos)
 
                         # get vectors from origin to target and to gaze point
-                        vGaze = gaze[i, :] - ori[i, :]
-                        vTarget = target_cam[frame_idx] - ori[i, :]
+                        v_gaze = gaze[i, :] - ori[i, :]
+                        v_target = target_cam[frame_idx] - ori[i, :]
 
                     # get offset
-                    ang2D = transforms.angle_between(vTarget, vGaze)
+                    ang_2d = transforms.angle_between(v_target, v_gaze)
                     # decompose in horizontal/vertical (in plane space)
-                    onPlaneAngle = math.atan2(gazePlane[i, 1] - targets[t][1], gazePlane[i, 0] - targets[t][0])
-                    offset[out_idx, idt, :] = ang2D * np.array([math.cos(onPlaneAngle), math.sin(onPlaneAngle)])
+                    on_plane_angle = math.atan2(gaze_plane[i, 1] - target_pos[1], gaze_plane[i, 0] - target_pos[0])
+                    offset[out_idx, idt, :] = ang_2d * np.array([math.cos(on_plane_angle), math.sin(on_plane_angle)])
 
             # special case for average of left and right eye
             if data_types.DataType.pose_left_right_avg in d_types:
@@ -187,9 +193,6 @@ def compute(
                         np.sum(np.isnan(offset[:, :, 0]), axis=0) / offset.shape[0]
                     )
 
-        if out_df is None:
-            out_df = df
-        else:
-            out_df = pd.concat((out_df, df))
+        out_df = df if out_df is None else pd.concat((out_df, df))
 
     out_df.to_csv(output_directory / filename, mode="w", header=True, sep="\t", na_rep="nan", float_format="%.6f")

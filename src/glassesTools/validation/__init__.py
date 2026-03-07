@@ -1,3 +1,5 @@
+"""Validation plane setup and dynamic marker handling."""
+
 import math
 import pathlib
 import typing
@@ -14,15 +16,19 @@ from . import dynamic as dynamic
 
 
 class Plane(_plane.TargetPlane):
+    """A validation plane with targets and optional dynamic markers."""
+
     def __init__(
         self,
         config_dir: str | pathlib.Path | None,
-        validation_config: dict[str, typing.Any] = None,
-        is_dynamic=False,
-        **kwarg,
-    ):
-        # NB: if config_dir is None, the default config will be used
+        validation_config: dict[str, typing.Any] | None = None,
+        is_dynamic: bool = False,
+        **kwarg: typing.Any,
+    ) -> None:
+        """Initialize validation plane from config directory.
 
+        If config_dir is None, the default config will be used.
+        """
         if config_dir is not None:
             config_dir = pathlib.Path(config_dir)
 
@@ -73,25 +79,30 @@ class Plane(_plane.TargetPlane):
         # set center
         self.set_origin(origin)
 
-    def _get_targets(self, config_dir, validationSetup, is_dynamic) -> tuple[pd.DataFrame, _plane.Coordinate]:
-        """Poster space: (0,0) is origin (might be center target), (-,-) bottom left"""
+    def _get_targets(
+        self,
+        config_dir: str | pathlib.Path | None,
+        validation_setup: dict[str, typing.Any],
+        is_dynamic: bool,
+    ) -> tuple[pd.DataFrame, _plane.Coordinate]:
+        """Poster space: (0,0) is origin (might be center target), (-,-) bottom left."""
         # read in target positions
-        targets = config.get_targets(config_dir, validationSetup["targetPosFile"])
+        targets = config.get_targets(config_dir, validation_setup["targetPosFile"])
         if targets is not None:
             targets_center = targets[["x", "y"]] * self.cell_size_mm
             if is_dynamic:
                 # split of columns indicating markers that signal appearance of a target
                 markers = pd.concat([targets.pop(c) for c in targets.columns if c.startswith("marker_")], axis=1)
             origin = _plane.Coordinate(
-                *targets_center.loc[validationSetup["centerTarget"]].values
+                *targets_center.loc[validation_setup["centerTarget"]].to_numpy()
             )  # NB: need origin in scaled space
             # load with dynamic markers, if any
             if is_dynamic:
                 marker_columns = {c: int(c.removeprefix("marker_")) for c in markers}
 
-                def _store_markers(r: pd.Series):
-                    for c in marker_columns:
-                        self.dynamic_markers[int(r[c])] = (int(r.name), marker_columns[c])
+                def _store_markers(r: pd.Series) -> None:
+                    for c, col_idx in marker_columns.items():
+                        self.dynamic_markers[int(r[c])] = (int(r.name), col_idx)
 
                 markers.apply(_store_markers, axis=1)
         else:
@@ -101,6 +112,7 @@ class Plane(_plane.TargetPlane):
         return targets, origin
 
     def get_marker_ids(self) -> dict[str | int, list[_marker.MarkerID]]:
+        """Return all marker IDs including dynamic markers."""
         if self._dynamic_markers_cache is None:
             self._dynamic_markers_cache = defaultdict(list)
             # {marker ID: (target ID, marker_N column in target file)} -> {marker_N column in target file: [(marker_id, aruco_dict)]}
@@ -108,8 +120,10 @@ class Plane(_plane.TargetPlane):
                 self._dynamic_markers_cache[self.dynamic_markers[m][1]].append(_marker.MarkerID(m, self.aruco_dict_id))
         return super().get_marker_ids() | self._dynamic_markers_cache
 
-    def is_dynamic(self):
+    def is_dynamic(self) -> bool:
+        """Return whether this plane uses dynamic markers."""
         return bool(self.dynamic_markers)
 
-    def get_dynamic_marker_setup(self):
+    def get_dynamic_marker_setup(self) -> aruco.MarkerSetup:
+        """Return the ArUco marker setup for detecting dynamic markers."""
         return aruco.MarkerSetup(aruco_detector_params={"markerBorderBits": self.marker_border_bits}, detect_only=True)

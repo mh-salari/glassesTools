@@ -1,3 +1,5 @@
+"""Deploy default validation poster config, markers, and PDF."""
+
 import importlib.resources
 import pathlib
 import shutil
@@ -5,10 +7,11 @@ import shutil
 from ... import aruco
 
 
-def deploy_config(output_dir: str | pathlib.Path, overwrite=False) -> list[str]:
+def deploy_config(output_dir: str | pathlib.Path, overwrite: bool = False) -> list[str]:
+    """Copy default validation config files to output_dir."""
     output_dir = pathlib.Path(output_dir)
     if not output_dir.is_dir():
-        raise RuntimeError('the requested directory "%s" does not exist' % output_dir)
+        raise RuntimeError(f'the requested directory "{output_dir}" does not exist')
 
     # copy over all config files
     not_copied: list[str] = []
@@ -24,10 +27,11 @@ def deploy_config(output_dir: str | pathlib.Path, overwrite=False) -> list[str]:
     return not_copied
 
 
-def deploy_maker(output_dir: str | pathlib.Path, overwrite=False) -> list[str]:
+def deploy_maker(output_dir: str | pathlib.Path, overwrite: bool = False) -> list[str]:
+    """Copy the poster TeX file and generate marker images to output_dir."""
     output_dir = pathlib.Path(output_dir)
     if not output_dir.is_dir():
-        raise RuntimeError('the requested directory "%s" does not exist' % output_dir)
+        raise RuntimeError(f'the requested directory "{output_dir}" does not exist')
 
     # copy over all files
     not_copied: list[str] = []
@@ -43,7 +47,8 @@ def deploy_maker(output_dir: str | pathlib.Path, overwrite=False) -> list[str]:
     return not_copied
 
 
-def deploy_marker_images(output_dir: str | pathlib.Path):
+def deploy_marker_images(output_dir: str | pathlib.Path) -> None:
+    """Generate and store ArUco marker images for the default validation poster."""
     from ..config import get_validation_setup
 
     output_dir = pathlib.Path(output_dir) / "all-markers"
@@ -51,18 +56,19 @@ def deploy_marker_images(output_dir: str | pathlib.Path):
         output_dir.mkdir()
 
     # get validation setup
-    validationSetup = get_validation_setup()
+    validation_setup = get_validation_setup()
 
     # generate and store the markers
     aruco.deploy_marker_images(
-        output_dir, 1000, validationSetup["arucoDictionary"], validationSetup["markerBorderBits"]
+        output_dir, 1000, validation_setup["arucoDictionary"], validation_setup["markerBorderBits"]
     )
 
 
-def deploy_default_pdf(output_file_or_dir: str | pathlib.Path):
+def deploy_default_pdf(output_file_or_dir: str | pathlib.Path) -> None:
+    """Copy the default poster PDF to the specified file or directory."""
     output_file_or_dir = pathlib.Path(output_file_or_dir)
     if output_file_or_dir.is_dir():
-        output_file_or_dir = output_file_or_dir / "poster.pdf"
+        output_file_or_dir /= "poster.pdf"
 
     with importlib.resources.path(__package__, "poster.pdf") as p:
         shutil.copyfile(p, str(output_file_or_dir))

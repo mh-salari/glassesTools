@@ -1,3 +1,5 @@
+"""Assign fixation intervals to validation targets."""
+
 import pathlib
 
 import matplotlib.pyplot as plt
@@ -7,20 +9,19 @@ import pandas as pd
 from .. import gaze_worldref, marker, naming
 
 
-# assign intervals to targets based on distance
 def distance(
     targets: dict[int, np.ndarray],
     fixations: str | pathlib.Path | pd.DataFrame,
-    do_global_shift=True,
-    max_dist_fac=0.5,
+    do_global_shift: bool = True,
+    max_dist_fac: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame | None]:
-
+    """Assign fixation intervals to targets based on spatial distance."""
     # read input if needed
     if not isinstance(fixations, pd.DataFrame):
         fixations = pd.read_csv(fixations, sep="\t", index_col=False)
 
     # for each target, find closest fixation
-    minDur = 100  # ms
+    min_dur = 100  # ms
     used = np.zeros((fixations["start"].size), dtype="bool")
     selected = np.empty((len(targets),), dtype="int")
     selected[:] = -999
@@ -49,7 +50,7 @@ def distance(
         if min_dist > 0:
             dist_lim = min_dist * max_dist_fac
 
-    for i, t in zip(range(len(targets)), targets):
+    for i, t in zip(range(len(targets)), targets, strict=True):
         if np.all(used):
             # all fixations used up, can't assign anything to remaining targets
             continue
@@ -59,16 +60,16 @@ def distance(
             fixations["ypos"] - off_f_y - (targets[t][1] - off_t_y),
         )
         dist[used] = np.inf  # make sure fixations already bound to a target are not used again
-        dist[fixations["dur"] < minDur] = np.inf  # make sure that fixations that are too short are not selected
-        iFix = np.argmin(dist)
-        if dist[iFix] <= dist_lim:
-            selected[i] = iFix
-            used[iFix] = True
+        dist[fixations["dur"] < min_dur] = np.inf  # make sure that fixations that are too short are not selected
+        i_fix = np.argmin(dist)
+        if dist[i_fix] <= dist_lim:
+            selected[i] = i_fix
+            used[i_fix] = True
 
     # prep return values
     selected_intervals = pd.DataFrame(columns=["xpos", "ypos", "startT", "endT"])  # sets which columns to copy
     selected_intervals.index.name = "target"
-    for i, t in zip(range(len(targets)), targets):
+    for i, t in zip(range(len(targets)), targets, strict=True):
         if selected[i] == -999:
             continue
         selected_intervals.loc[t] = fixations.iloc[selected[i]]
@@ -87,6 +88,7 @@ def dynamic_markers(
     name: str = "",
     allow_missing: bool = False,
 ) -> tuple[pd.DataFrame, None]:
+    """Assign intervals to targets using dynamic marker appearance signals."""
     # also need frame timestamps because the intervals returned by this function should be expressed in recording time, not as frame indices.
     timestamps = pd.read_csv(timestamps_file, delimiter="\t", index_col="frame_idx")
     ts_col = "timestamp_stretched" if "timestamp_stretched" in timestamps else "timestamp"
@@ -101,7 +103,7 @@ def dynamic_markers(
             missing_str = "\n- ".join([marker.marker_id_to_str(m) for m in markers_per_target[t]])
             extra = (
                 f"from frame {episode[0]} to frame {episode[1]}"
-                if name == ""
+                if not name
                 else f'"{name}" from frame {episode[0]} to frame {episode[1]}'
             )
             raise RuntimeError(
@@ -143,10 +145,11 @@ def plot(
     episode: list[int],
     output_directory: str | pathlib.Path,
     filename_stem: str = naming.fixation_assignment_prefix,
-    iteration=0,
+    iteration: int = 0,
     background_image: tuple[np.ndarray, list[float]] | None = None,  # (image, extent in mm [l r t b])
     plot_limits: list[list[float]] | None = None,
-):
+) -> None:
+    """Plot fixation-to-target assignment overlaid on the poster image."""
     output_directory = pathlib.Path(output_directory)
     # if we do not have x and y positions for the gaze intervals, make them
     if "xpos" not in selected_intervals.columns or (
@@ -194,7 +197,7 @@ def plot(
         all_intervals = selected_intervals.set_index("startT").sort_index()
 
     f = plt.figure(dpi=300)
-    imgplot = plt.imshow(background_image[0], extent=background_image[1], alpha=0.5)
+    plt.imshow(background_image[0], extent=background_image[1], alpha=0.5)
     # draw all intervals
     plt.plot(all_intervals["xpos"], all_intervals["ypos"], "b-")
     plt.plot(all_intervals["xpos"], all_intervals["ypos"], "go")
@@ -218,8 +221,9 @@ def to_tsv(
     selected_intervals: pd.DataFrame,
     output_directory: str | pathlib.Path,
     filename_stem: str = naming.fixation_assignment_prefix,
-    iteration=0,
-):
+    iteration: int = 0,
+) -> None:
+    """Write selected intervals to a TSV file."""
     output_directory = pathlib.Path(output_directory)
     # store selected intervals
     selected_intervals = selected_intervals.drop(
@@ -227,7 +231,8 @@ def to_tsv(
     ).rename(columns={"startT": "start_timestamp", "endT": "end_timestamp"})
     if "marker_interval" in selected_intervals.columns:
         # check matches
-        assert all(selected_intervals["marker_interval"] == iteration + 1)
+        if not all(selected_intervals["marker_interval"] == iteration + 1):
+            raise ValueError(f"marker_interval column values do not match expected iteration {iteration + 1}")
     else:
         selected_intervals.insert(0, "marker_interval", iteration + 1)
 

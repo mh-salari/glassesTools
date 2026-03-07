@@ -1,3 +1,5 @@
+"""Export and summarize validation data quality metrics."""
+
 import pathlib
 
 import pandas as pd
@@ -6,9 +8,11 @@ from .. import data_types
 
 
 def collect_data_quality(
-    rec_dirs: list[str | pathlib.Path], file_name: str | dict[str, str] = "dataQuality.tsv", col_for_parent=None
-):
-    # 1. collect all data quality metrics from the provided directories
+    rec_dirs: list[str | pathlib.Path],
+    file_name: str | dict[str, str] = "dataQuality.tsv",
+    col_for_parent: str | None = None,
+) -> tuple[pd.DataFrame | None, data_types.DataType | None, list[int] | None]:
+    """Collect data quality metrics from recording directories into a single DataFrame."""
     rec_files: list = []
     idx_vals = ["recording"]
     if isinstance(file_name, dict):
@@ -33,15 +37,15 @@ def collect_data_quality(
     if df.empty:
         return None, None, None
     # set indices
-    df = df.set_index(idx_vals + ["marker_interval", "type", "target"])
+    df = df.set_index([*idx_vals, "marker_interval", "type", "target"])
     # change type index into enum
-    typeIdx = df.index.names.index("type")
+    type_idx = df.index.names.index("type")
     df.index = df.index.set_levels(
-        pd.CategoricalIndex([getattr(data_types.DataType, x) for x in df.index.levels[typeIdx]]), level="type"
+        pd.CategoricalIndex([getattr(data_types.DataType, x) for x in df.index.levels[type_idx]]), level="type"
     )
 
     # see what we have
-    dq_types = sorted(list(df.index.levels[typeIdx]), key=lambda dq: dq.value)
+    dq_types = sorted(df.index.levels[type_idx], key=lambda dq: dq.value)
     targets = list(df.index.levels[df.index.names.index("target")])
 
     # good default selection of dq type to export
@@ -61,10 +65,11 @@ def summarize_and_store_data_quality(
     output_file_or_dir: str | pathlib.Path,
     dq_types: list[data_types.DataType],
     targets: list[int],
-    average_over_targets=False,
-    include_data_loss=False,
-):
-    dq_types_have = sorted(list(df.index.levels[df.index.names.index("type")]), key=lambda dq: dq.value)
+    average_over_targets: bool = False,
+    include_data_loss: bool = False,
+) -> None:
+    """Filter, optionally average, and write data quality metrics to TSV."""
+    dq_types_have = sorted(df.index.levels[df.index.names.index("type")], key=lambda dq: dq.value)
     targets_have = list(df.index.levels[df.index.names.index("target")])
 
     # remove unwanted types of data quality
@@ -89,18 +94,19 @@ def summarize_and_store_data_quality(
     # store
     output_file_or_dir = pathlib.Path(output_file_or_dir)
     if output_file_or_dir.is_dir():
-        output_file_or_dir = output_file_or_dir / "dataQuality.tsv"
+        output_file_or_dir /= "dataQuality.tsv"
     df.to_csv(output_file_or_dir, mode="w", header=True, sep="\t", na_rep="nan", float_format="%.6f")
 
 
 def export_data_quality(
     rec_dirs: list[str | pathlib.Path],
     output_file_or_dir: str | pathlib.Path,
-    dq_types: list[data_types.DataType] = None,
-    targets: list[int] = None,
-    average_over_targets=False,
-    include_data_loss=False,
-):
+    dq_types: list[data_types.DataType] | None = None,
+    targets: list[int] | None = None,
+    average_over_targets: bool = False,
+    include_data_loss: bool = False,
+) -> None:
+    """Collect, summarize, and export data quality metrics from recording directories."""
     df, default_dq_type, targets_have = collect_data_quality(rec_dirs)
     if not dq_types:
         dq_types = [default_dq_type]
@@ -111,7 +117,10 @@ def export_data_quality(
     )
 
 
-def export_et_sync(rec_dirs: list[str | pathlib.Path], in_file_name: str, output_file_or_dir: str | pathlib.Path):
+def export_et_sync(
+    rec_dirs: list[str | pathlib.Path], in_file_name: str, output_file_or_dir: str | pathlib.Path
+) -> None:
+    """Collect and export eye tracker synchronization data from recording directories."""
     sync_files = [
         (pathlib.Path(rec) / in_file_name, {"recording": rec.name, "session": rec.parent.name}) for rec in rec_dirs
     ]
@@ -124,5 +133,5 @@ def export_et_sync(rec_dirs: list[str | pathlib.Path], in_file_name: str, output
     # store
     output_file_or_dir = pathlib.Path(output_file_or_dir)
     if output_file_or_dir.is_dir():
-        output_file_or_dir = output_file_or_dir / "et_sync.tsv"
+        output_file_or_dir /= "et_sync.tsv"
     df.to_csv(output_file_or_dir, mode="w", header=True, sep="\t", na_rep="nan", float_format="%.6f")
