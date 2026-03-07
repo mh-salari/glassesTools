@@ -1,6 +1,7 @@
 """Cast Meta Aria Gen 1 data into common format."""
 
 import json
+import logging
 import pathlib
 import shutil
 
@@ -9,6 +10,8 @@ import pandas as pd
 from .. import naming, timestamps, video_utils
 from ..eyetracker import EyeTracker
 from ..recording import Recording
+
+logger = logging.getLogger(__name__)
 
 
 def import_data(
@@ -87,9 +90,7 @@ def get_recording_info(input_dir: str | pathlib.Path) -> Recording | None:
     # check expected files are present
     for f in ("metadata.json", "worldCamera.mp4", "gaze.tsv", "calibration.xml"):
         if not (input_dir / f).is_file():
-            print(
-                f"This directory does not contain a valid {EyeTracker.Meta_Aria_Gen_1.value} recording export. The {f} file is not found in the input directory {input_dir}. Make sure you run the meta_aria_gen1_exporter.py script on the recording's vrs file"
-            )
+            logger.info("Missing %s in %s — not a valid %s recording", f, input_dir, EyeTracker.Meta_Aria_Gen_1.value)
             return None
 
     with pathlib.Path(input_dir / "metadata.json").open(encoding="utf-8") as f:

@@ -3,6 +3,7 @@
 Name of recording will be the name of the folder that is imported.
 """
 
+import logging
 import pathlib
 import shutil
 
@@ -11,6 +12,8 @@ import pandas as pd
 from .. import gaze_headref, naming, video_utils
 from ..eyetracker import EyeTracker
 from ..recording import Recording
+
+logger = logging.getLogger(__name__)
 
 
 def import_data(
@@ -134,12 +137,10 @@ def get_recording_info(input_dir: str | pathlib.Path, device_name: str | None = 
     if rec_info_fname.is_file():
         rec_info = Recording.load_from_json(rec_info_fname)
         if rec_info.eye_tracker != EyeTracker.Generic:
-            print(
-                f'A recording for a "{EyeTracker.Generic.value}" eye tracker was not found in the folder {input_dir}.'
-            )
+            logger.info('Not a "%s" eye tracker recording in %s', EyeTracker.Generic.value, input_dir)
             return None
         if rec_info.eye_tracker_name != device_name:
-            print(f'A recording for a "{device_name}" device was not found in the folder {input_dir}.')
+            logger.info('No recording for device "%s" found in %s', device_name, input_dir)
             return None
         # override input_dir to make sure its set correctly
         rec_info.source_directory = input_dir
@@ -151,9 +152,7 @@ def get_recording_info(input_dir: str | pathlib.Path, device_name: str | None = 
     # check expected files are present
     for f in ("worldCamera.mp4", "gaze_data.tsv"):
         if not (input_dir / f).is_file():
-            print(
-                f"This directory does not contain a valid generic recording for a {device_name} eye tracker. The {f} file is not found in the input directory {input_dir}."
-            )
+            logger.info("Missing %s in %s — not a valid generic recording for %s", f, input_dir, device_name)
             return None
 
     return rec_info
